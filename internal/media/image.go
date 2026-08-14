@@ -10,8 +10,6 @@ import (
 	"log"
 	"net/http"
 	"time"
-
-	"telegram-ai-assistant/internal/assets"
 )
 
 type ImageService struct {
