@@ -62,8 +62,7 @@ func (s *ImageService) GenerateImage(ctx context.Context, prompt string) (*Gener
 		}
 	}
 
-	refImages := assets.GetJanviAIReferenceImages()
-	fullPrompt := prompt + ", 8K resolution, photorealistic, natural skin texture, masterpiece, authentic photography, no watermark, no text"
+	fullPrompt := prompt + ", 8K UHD, masterpiece, award-winning editorial portrait photography, crystal clear sharp focus, natural skin texture with realistic micro-pores, soft cinematic lighting, rich colors, zero watermark, no blur, no grain"
 
 	var lastErr error
 	for _, model := range models {
@@ -75,10 +74,6 @@ func (s *ImageService) GenerateImage(ctx context.Context, prompt string) (*Gener
 			"n":               1,
 			"size":            "1024x1024",
 			"response_format": "b64_json",
-		}
-		if len(refImages) > 0 {
-			reqBody["image_urls"] = refImages
-			reqBody["image"] = refImages[0]
 		}
 
 		bodyBytes, _ := json.Marshal(reqBody)

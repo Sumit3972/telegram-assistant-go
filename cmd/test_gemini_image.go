@@ -16,7 +16,7 @@ func main() {
 	apiKey := "sk-keX97M0DcDPCTdR9Udg7fw"
 	apiURL := "https://api.anyapi.ai/v1/images/generations"
 
-	prompt := "A photorealistic 8K cinema portrait of Janvi, an exceptionally gorgeous 25yo Bollywood actress from Mumbai with the youthful ethereal beauty and charming dimples of Alia Bhatt, radiant glowing fair golden complexion with natural rosy flush, soft round-oval face, cute deep dimples on her cheeks, sweet infectious dimpled smile, large expressive warm dark almond eyes with delicate lashes, graceful arched eyebrows, cute slender nose, naturally plump rose-pink lips, and luxurious glossy jet-black wavy hair cascading in soft layers past her shoulders, wearing an elegant fitted black satin dress, 85mm portrait lens, 8K resolution, photorealistic."
+	prompt := "A photorealistic 8K cinema portrait of Janvi, an exceptionally gorgeous, stunningly beautiful and hot 25yo Indian woman from Mumbai with glowing milky-white fair porcelain skin, a delicate natural peach-rose blush, exquisite feminine facial features, large expressive dark almond eyes with long sultry lashes, sculpted arched eyebrows, a cute slender nose, luscious naturally plump rose-pink lips, a breathtaking captivating smile, and luxurious glossy silky jet-black wavy hair cascading past her shoulders, wearing an elegant fitted black satin dress with delicate straps, 85mm portrait lens, shallow depth of field, 8K resolution, photorealistic, raw skin texture."
 
 	models := []string{
 		"openai/gpt-5-image-mini",
