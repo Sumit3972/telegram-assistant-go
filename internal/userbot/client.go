@@ -96,7 +96,8 @@ func (ub *UserbotManager) Start(ctx context.Context) error {
 	}
 
 	memStorage := &session.StorageMemory{}
-	if err := memStorage.StoreSession(ctx, sessData); err != nil {
+	loader := session.Loader{Storage: memStorage}
+	if err := loader.Save(ctx, sessData); err != nil {
 		log.Printf("⚠️ [Userbot] Failed to store session: %v", err)
 		return nil
 	}
