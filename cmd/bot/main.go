@@ -77,6 +77,14 @@ func main() {
 	// 5. Initialize AI Client
 	providers := []ai.ProviderConfig{
 		{
+			BaseURL: "https://gorouter.app/v1",
+			APIKey:  "sk-LlJ8vC0ociQnotHY5gFw3K6onFmXlmFSNUJs8uGOmzLPxqpM",
+			Models: []string{
+				"claude-opus-5-thinking",
+				"claude-opus-4-8",
+			},
+		},
+		{
 			BaseURL: cfg.AIBaseURL,
 			APIKey:  cfg.AIAPIKey,
 			Models: []string{
