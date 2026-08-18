@@ -46,6 +46,8 @@ func NewServer(cfg *config.Config, botClient *telegram.BotClient, workerPool *Wo
 	r.Get("/setup", handlers.Setup)
 	r.Get("/media/{fileId}", handlers.MediaProxy)
 	r.Get("/", handlers.Health)
+	r.Get("/health", handlers.Health)
+	r.Get("/healthz", handlers.Health)
 	r.Get("/ping", handlers.Ping)
 	r.Get("/admin/upgrade-plan", handlers.UpgradePlan)
 	r.Post("/admin/upgrade-plan", handlers.UpgradePlan)
