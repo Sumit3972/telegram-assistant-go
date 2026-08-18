@@ -277,20 +277,7 @@ func (m *Moderator) isTalkingToBot(msg *domain.TelegramMessage, text string) boo
 		}
 	}
 
-	// 3. Check direct conversational questions/prompts in group chats
-	convTriggers := []string{
-		"tu kon", "kon hai", "kaun hai", "who are you",
-		"kya kar rahi", "kya kar raha", "kaisi ho", "kaisa hai",
-		"photo bhej", "pic bhej", "selfie bhej", "song sunao", "voice sunao",
-		"degi", "dega", "batao", "dikhao",
-	}
-	for _, tr := range convTriggers {
-		if strings.Contains(lowerText, tr) {
-			return true
-		}
-	}
-
-	// 4. Check reply to her message
+	// 3. Check direct reply to her message
 	if msg.ReplyToMessage != nil {
 		// A. Check by From user metadata if present
 		if msg.ReplyToMessage.From != nil {
@@ -309,26 +296,6 @@ func (m *Moderator) isTalkingToBot(msg *domain.TelegramMessage, text string) boo
 			if isBotMsg, err := m.historyRepo.IsMessageFromBotOrAssistant(
 				context.Background(), chatIDStr, replyIDStr, m.cfg.MyPersonalUserID, m.cfg.MyPersonalUsername,
 			); err == nil && isBotMsg {
-				return true
-			}
-		}
-	}
-
-	// 5. Active Userbot Conversation Session (if userbot spoke in this chat within last 5 minutes)
-	if msg.IsUserbot {
-		chatIDStr := fmt.Sprintf("%d", msg.Chat.ID)
-		recentCutoff := time.Now().Add(-5 * time.Minute).Unix()
-		if isActive, err := m.historyRepo.IsAdminActiveSince(context.Background(), chatIDStr, "assistant", recentCutoff); err == nil && isActive {
-			return true
-		}
-
-		// Also check 2nd-person address or direct dialogue cues
-		directDialogue := []string{
-			"tu ", "tu?", "tu!", "tujhe", "tera", "teri", "tere", "tum ", "tumhe", "tumhara",
-			"hijju", "real se aa", "fake", "marja", "sharm", "aukaat", "apna", "apni",
-		}
-		for _, d := range directDialogue {
-			if strings.Contains(lowerText, d) {
 				return true
 			}
 		}
