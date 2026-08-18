@@ -108,6 +108,10 @@ func NewModerator(
 	}
 }
 
+func (m *Moderator) SetUserbotSender(s domain.UserbotSender) {
+	m.convHandler.SetUserbotSender(s)
+}
+
 func (m *Moderator) HandleUpdate(ctx context.Context, update *domain.TelegramUpdate) {
 	if update == nil {
 		return

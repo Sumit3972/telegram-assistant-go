@@ -131,6 +131,7 @@ func main() {
 	userbotMgr := userbot.NewUserbotManager(cfg, botClient, func(ctx context.Context, update *domain.TelegramUpdate) {
 		workerPool.Enqueue(update)
 	})
+	mod.SetUserbotSender(userbotMgr)
 	if err := userbotMgr.Start(context.Background()); err != nil {
 		log.Printf("⚠️ Userbot startup warning: %v", err)
 	}

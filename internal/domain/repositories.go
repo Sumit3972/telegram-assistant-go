@@ -80,3 +80,11 @@ type PerformanceRepository interface {
 	RecordPerformance(ctx context.Context, providerURL, modelName string, isSuccess bool, latencyMs int64) error
 	GetModelScores(ctx context.Context) (map[string]float64, error)
 }
+
+type UserbotSender interface {
+	SendMessage(ctx context.Context, chatID int64, text string, replyToID int) error
+	SendPhoto(ctx context.Context, chatID int64, photoData []byte, photoURL, caption string, replyToID int) error
+	SendVoice(ctx context.Context, chatID int64, voiceData []byte, replyToID int) error
+	SetReaction(ctx context.Context, chatID int64, msgID int, emoji string) error
+	IsAvailable() bool
+}

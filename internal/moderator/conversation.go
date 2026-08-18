@@ -28,9 +28,14 @@ type ConversationHandler struct {
 	warningRepo   domain.WarningRepository
 	modLogRepo    domain.ModerationLogRepository
 	botClient     *telegram.BotClient
+	userbotSender domain.UserbotSender
 	botName       string
 	botUsername   string
 	fallbackKey   string
+}
+
+func (h *ConversationHandler) SetUserbotSender(s domain.UserbotSender) {
+	h.userbotSender = s
 }
 
 func NewConversationHandler(
@@ -197,9 +202,7 @@ func (h *ConversationHandler) executeToolCall(
 			finalRes, err := h.aiClient.ChatCompletions(ctx, toolMessages, ai.ChatCompletionOptions{})
 			if err == nil && finalRes != nil {
 				reply := finalRes.Message.GetStringContent()
-				_, _ = h.botClient.SendMessage(ctx, msg.Chat.ID, reply, telegram.SendMessageOptions{
-					ReplyToID: msg.MessageID,
-				})
+				h.sendMessage(ctx, msg, reply)
 			}
 		}
 
@@ -211,9 +214,7 @@ func (h *ConversationHandler) executeToolCall(
 	case "play_music", "skip_music", "pause_music", "resume_music", "stop_music":
 		songName, _ := args["song_name"].(string)
 		musicRes, _ := h.musicService.ExecuteMusicCommand(ctx, chatIDStr, name, songName)
-		_, _ = h.botClient.SendMessage(ctx, msg.Chat.ID, musicRes, telegram.SendMessageOptions{
-			ReplyToID: msg.MessageID,
-		})
+		h.sendMessage(ctx, msg, musicRes)
 
 	case "forward_to_admin":
 		msgText, _ := args["message_text"].(string)
@@ -231,9 +232,7 @@ func (h *ConversationHandler) generateAndSendPhoto(ctx context.Context, msg *dom
 	cleanPrompt := strings.TrimSpace(rawPrompt)
 	if cleanPrompt == "" || strings.EqualFold(cleanPrompt, "null") || strings.EqualFold(cleanPrompt, "none") {
 		if replyText != "" {
-			_, _ = h.botClient.SendMessage(ctx, msg.Chat.ID, replyText, telegram.SendMessageOptions{
-				ReplyToID: msg.MessageID,
-			})
+			h.sendMessage(ctx, msg, replyText)
 		}
 		return
 	}
@@ -243,17 +242,15 @@ func (h *ConversationHandler) generateAndSendPhoto(ctx context.Context, msg *dom
 	if err != nil || img == nil {
 		log.Printf("[Conversation] Failed to generate image: %v", err)
 		if replyText != "" {
-			_, _ = h.botClient.SendMessage(ctx, msg.Chat.ID, replyText, telegram.SendMessageOptions{
-				ReplyToID: msg.MessageID,
-			})
+			h.sendMessage(ctx, msg, replyText)
 		}
 		return
 	}
 
 	if len(img.Data) > 0 {
-		_, _ = h.botClient.SendPhoto(ctx, msg.Chat.ID, img.Data, "", replyText, msg.MessageID, "HTML")
+		h.sendPhoto(ctx, msg, img.Data, "", replyText)
 	} else if img.URL != "" {
-		_, _ = h.botClient.SendPhoto(ctx, msg.Chat.ID, nil, img.URL, replyText, msg.MessageID, "HTML")
+		h.sendPhoto(ctx, msg, nil, img.URL, replyText)
 	}
 }
 
@@ -287,7 +284,7 @@ func (h *ConversationHandler) parseAndDispatchResponse(
 
 	if !resp.ShouldReply {
 		if resp.DynamicEmoji != nil && *resp.DynamicEmoji != "" {
-			h.botClient.SetMessageReaction(ctx, msg.Chat.ID, msg.MessageID, *resp.DynamicEmoji)
+			h.setReaction(ctx, msg, *resp.DynamicEmoji)
 		}
 		return
 	}
@@ -302,11 +299,9 @@ func (h *ConversationHandler) parseAndDispatchResponse(
 	if resp.VoiceResponse != nil && resp.VoiceResponse.ShouldSpeak && resp.VoiceResponse.TTSText != "" {
 		audioData, err := h.voiceService.GenerateVoice(ctx, resp.VoiceResponse.TTSText)
 		if err == nil && len(audioData) > 0 {
-			_, _ = h.botClient.SendVoice(ctx, msg.Chat.ID, audioData, msg.MessageID)
+			h.sendVoice(ctx, msg, audioData)
 			if resp.ReplyText != "" {
-				_, _ = h.botClient.SendMessage(ctx, msg.Chat.ID, resp.ReplyText, telegram.SendMessageOptions{
-					ReplyToID: msg.MessageID,
-				})
+				h.sendMessage(ctx, msg, resp.ReplyText)
 			}
 			return
 		}
@@ -314,10 +309,62 @@ func (h *ConversationHandler) parseAndDispatchResponse(
 
 	// Send normal text reply
 	if resp.ReplyText != "" {
-		_, _ = h.botClient.SendMessage(ctx, msg.Chat.ID, resp.ReplyText, telegram.SendMessageOptions{
-			ReplyToID: msg.MessageID,
-		})
+		h.sendMessage(ctx, msg, resp.ReplyText)
 	}
+}
+
+func (h *ConversationHandler) sendMessage(ctx context.Context, msg *domain.TelegramMessage, text string) {
+	if msg.IsUserbot && h.userbotSender != nil && h.userbotSender.IsAvailable() {
+		log.Printf("[Conversation] Sending reply from Userbot MTProto account to chat %d...", msg.Chat.ID)
+		err := h.userbotSender.SendMessage(ctx, msg.Chat.ID, text, msg.MessageID)
+		if err == nil {
+			return
+		}
+		log.Printf("⚠️ [Conversation] Userbot SendMessage failed: %v. Falling back to bot API...", err)
+	}
+
+	_, _ = h.botClient.SendMessage(ctx, msg.Chat.ID, text, telegram.SendMessageOptions{
+		ReplyToID: msg.MessageID,
+	})
+}
+
+func (h *ConversationHandler) sendPhoto(ctx context.Context, msg *domain.TelegramMessage, photoData []byte, photoURL, caption string) {
+	if msg.IsUserbot && h.userbotSender != nil && h.userbotSender.IsAvailable() {
+		log.Printf("[Conversation] Sending photo from Userbot MTProto account to chat %d...", msg.Chat.ID)
+		err := h.userbotSender.SendPhoto(ctx, msg.Chat.ID, photoData, photoURL, caption, msg.MessageID)
+		if err == nil {
+			return
+		}
+		log.Printf("⚠️ [Conversation] Userbot SendPhoto failed: %v. Falling back to bot API...", err)
+	}
+
+	if len(photoData) > 0 {
+		_, _ = h.botClient.SendPhoto(ctx, msg.Chat.ID, photoData, "", caption, msg.MessageID, "HTML")
+	} else if photoURL != "" {
+		_, _ = h.botClient.SendPhoto(ctx, msg.Chat.ID, nil, photoURL, caption, msg.MessageID, "HTML")
+	}
+}
+
+func (h *ConversationHandler) sendVoice(ctx context.Context, msg *domain.TelegramMessage, voiceData []byte) {
+	if msg.IsUserbot && h.userbotSender != nil && h.userbotSender.IsAvailable() {
+		log.Printf("[Conversation] Sending voice from Userbot MTProto account to chat %d...", msg.Chat.ID)
+		err := h.userbotSender.SendVoice(ctx, msg.Chat.ID, voiceData, msg.MessageID)
+		if err == nil {
+			return
+		}
+		log.Printf("⚠️ [Conversation] Userbot SendVoice failed: %v. Falling back to bot API...", err)
+	}
+
+	_, _ = h.botClient.SendVoice(ctx, msg.Chat.ID, voiceData, msg.MessageID)
+}
+
+func (h *ConversationHandler) setReaction(ctx context.Context, msg *domain.TelegramMessage, emoji string) {
+	if msg.IsUserbot && h.userbotSender != nil && h.userbotSender.IsAvailable() {
+		_ = h.userbotSender.SetReaction(ctx, msg.Chat.ID, msg.MessageID, emoji)
+		return
+	}
+
+	h.botClient.SetMessageReaction(ctx, msg.Chat.ID, msg.MessageID, emoji)
 }
 
 func (h *ConversationHandler) forwardToAdmin(ctx context.Context, msg *domain.TelegramMessage, msgText, adminUname string) {

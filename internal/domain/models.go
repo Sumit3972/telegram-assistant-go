@@ -50,6 +50,7 @@ type TelegramMessage struct {
 	LeftChatMember  *TelegramUser    `json:"left_chat_member,omitempty"`
 	NewChatTitle    string           `json:"new_chat_title,omitempty"`
 	MigrateToChatID int64            `json:"migrate_to_chat_id,omitempty"`
+	IsUserbot       bool             `json:"is_userbot,omitempty"`
 }
 
 type CallbackQuery struct {
