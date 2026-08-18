@@ -105,13 +105,11 @@ func (s *ImageService) GenerateImage(ctx context.Context, prompt string) (*Gener
 	models := []string{primary}
 	fallbacks := []string{
 		"gpt-image-2",
-		"grok-imagine-image-lite",
-		"grok-imagine-image",
-		"grok-imagine-image-quality",
-		"grok-imagine-image-quality-lite",
-		"grok-imagine-image-edit",
 		"qwen-image-2512",
 		"z-image-turbo",
+		"grok-imagine-image-quality-lite",
+		"grok-imagine-image-lite",
+		"grok-imagine-image",
 	}
 	for _, m := range fallbacks {
 		if m != primary {
