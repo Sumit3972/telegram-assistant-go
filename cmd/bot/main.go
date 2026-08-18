@@ -77,10 +77,11 @@ func main() {
 	// 5. Initialize AI Client
 	providers := []ai.ProviderConfig{
 		{
-			BaseURL: "https://sumit3972.alwaysdata.net/v1",
-			APIKey:  "sk-TPUawcFJbkyiBuaBhE4Gu2TzBAVIfi7yfNBGuVbuNksqPxMt",
+			BaseURL: "https://novarouter.site/api/v1",
+			APIKey:  "nr_sk_JBswU_kp6fKPGtuDpKZGoqUUBags",
 			Models: []string{
 				"gpt-5.6-sol",
+				"gemini-3-pro",
 			},
 		},
 		{
