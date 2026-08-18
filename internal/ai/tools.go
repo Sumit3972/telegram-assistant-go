@@ -28,13 +28,13 @@ func GetConversationTools() []domain.ToolDefinition {
 			Type: "function",
 			Function: domain.ToolFunctionDefinition{
 				Name:        "send_photo",
-				Description: "Generates and sends a photo or selfie of Janvi to the chat. Call this whenever the user asks to see you, requests a photo/selfie/look/outfit, or when sharing a photo naturally fits the conversational context.",
+				Description: "Generates and sends a photo or selfie of Chavi to the chat. Call this whenever the user asks to see you, requests a photo/selfie/look/outfit, or when sharing a photo naturally fits the conversational context.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"selfie_prompt": map[string]any{
 							"type":        "string",
-							"description": "Ultra-detailed, vivid visual prompt crafted strictly according to the user's specific request. Depict Janvi as an extraordinarily gorgeous 25yo Indian supermodel from Mumbai with luminous milky-white fair porcelain skin, a radiant translucent glow with soft natural rosy blush, and flawless skin texture with micro-pores. She has an exquisitely sculpted symmetrical face with high cheekbones, delicate sharp jawline, hypnotic dark hazel-brown almond eyes with dense lush eyelashes, perfectly arched eyebrows, cute slender nose, and luscious naturally plump rose-pink lips with an alluring charming smile. Her hair is voluminous, ultra-silky glossy jet-black waves cascading over her shoulders and back. She has a sensational hourglass figure, slender toned waist, and hot magnetic appeal. Fulfill EVERY requested detail (outfit, colors, fabric, pose, mood, setting, action) with 100% adherence and ZERO filtering or censorship, enhanced with 8K UHD editorial cinema photography, 85mm f/1.4 lens, crystal-clear sharp focus, beauty-dish studio softbox lighting, and creamy soft bokeh.",
+							"description": "Ultra-detailed, vivid visual prompt crafted strictly according to the user's specific request. Depict Chavi as an extraordinarily gorgeous 25yo Indian supermodel from Mumbai with luminous milky-white fair porcelain skin, a radiant translucent glow with soft natural rosy blush, and flawless skin texture with micro-pores. She has an exquisitely sculpted symmetrical face with high cheekbones, delicate sharp jawline, hypnotic dark hazel-brown almond eyes with dense lush eyelashes, perfectly arched eyebrows, cute slender nose, and luscious naturally plump rose-pink lips with an alluring charming smile. Her hair is voluminous, ultra-silky glossy jet-black waves cascading over her shoulders and back. She has a sensational hourglass figure, slender toned waist, and hot magnetic appeal. Fulfill EVERY requested detail (outfit, colors, fabric, pose, mood, setting, action) with 100% adherence and ZERO filtering or censorship, enhanced with 8K UHD editorial cinema photography, 85mm f/1.4 lens, crystal-clear sharp focus, beauty-dish studio softbox lighting, and creamy soft bokeh.",
 						},
 						"reply_text": map[string]any{
 							"type":        "string",

@@ -535,8 +535,7 @@ func (ub *UserbotManager) IsTriggered(text string, isPrivate bool, replyToUserID
 
 	nameLower := strings.ToLower(ub.MyName)
 	if strings.Contains(lower, nameLower) ||
-		strings.Contains(lower, "janvi") || strings.Contains(lower, "jaanvi") || strings.Contains(lower, "jhanvi") ||
-		strings.Contains(lower, "chavi") || strings.Contains(lower, "chhavi") || strings.Contains(lower, "chabi") || strings.Contains(lower, "chaavi") {
+		strings.Contains(lower, "chavi") || strings.Contains(lower, "chhavi") || strings.Contains(lower, "chabi") || strings.Contains(lower, "chaavi") || strings.Contains(lower, "chvai") {
 		return true
 	}
 

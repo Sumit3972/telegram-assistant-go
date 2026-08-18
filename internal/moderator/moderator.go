@@ -251,10 +251,10 @@ func (m *Moderator) isTalkingToBot(msg *domain.TelegramMessage, text string) boo
 	botUname := strings.ToLower(strings.TrimPrefix(m.cfg.MyPersonalUsername, "@"))
 	botName := strings.ToLower(m.cfg.MyPersonalName)
 
-	// 1. Check mention of usernames
+	// 1. Check mention of usernames (Chvai396 and variations)
 	userNames := []string{
 		botUname,
-		"janvi3976", "sumit3972",
+		"chvai396", "chavi396", "chvai",
 	}
 	for _, u := range userNames {
 		if u != "" && (strings.Contains(lowerText, "@"+u) || strings.Contains(lowerText, u)) {
@@ -262,12 +262,10 @@ func (m *Moderator) isTalkingToBot(msg *domain.TelegramMessage, text string) boo
 		}
 	}
 
-	// 2. Check mention of name (Janvi, Sumit, Chavi, and common variations)
+	// 2. Check mention of name (Chavi Sharma and phonetic variations)
 	nameTriggers := []string{
 		botName,
-		"sumit", "sumeet", "shumit", "amit",
-		"janvi", "jaanvi", "jhanvi", "zanvi", "janu", "jaanu",
-		"chavi", "chhavi", "chabi", "chaavi", "chhabbi", "chhabee",
+		"chavi sharma", "chavi", "chhavi", "chabi", "chaavi", "chhabbi", "chhabee",
 	}
 	for _, n := range nameTriggers {
 		if n != "" && strings.Contains(lowerText, n) {
