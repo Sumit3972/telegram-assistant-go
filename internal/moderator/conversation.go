@@ -124,10 +124,9 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 		HistoryContext: histContext.String(),
 	})
 
-	// 5. Assemble Tools
+	// 5. Assemble Tools (Note: Music tools removed so AI sings/speaks songs in voice notes)
 	var tools []domain.ToolDefinition
 	tools = append(tools, ai.GetConversationTools()...)
-	tools = append(tools, ai.GetMusicTools()...)
 	tools = append(tools, ai.GetContactAdminTools()...)
 	if isAdmin {
 		tools = append(tools, ai.GetAdminTools()...)
@@ -196,7 +195,7 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 	// 6. Handle Tool Calls if returned
 	if len(res.Message.ToolCalls) > 0 {
 		for _, tc := range res.Message.ToolCalls {
-			h.executeToolCall(ctx, msg, tc, isAdmin, messages)
+			h.executeToolCall(ctx, msg, tc, isAdmin, messages, userIDStr, username, chatIDStr)
 		}
 		return
 	}
@@ -212,6 +211,7 @@ func (h *ConversationHandler) executeToolCall(
 	tc domain.ToolCall,
 	isAdmin bool,
 	history []domain.ChatMessage,
+	userIDStr, username, chatIDStr string,
 ) {
 	name := tc.Function.Name
 	argsJSON := tc.Function.Arguments
@@ -219,8 +219,6 @@ func (h *ConversationHandler) executeToolCall(
 
 	var args map[string]any
 	_ = json.Unmarshal([]byte(argsJSON), &args)
-
-	chatIDStr := fmt.Sprintf("%d", msg.Chat.ID)
 
 	switch name {
 	case "web_search":
@@ -242,7 +240,7 @@ func (h *ConversationHandler) executeToolCall(
 			finalRes, err := h.aiClient.ChatCompletions(ctx, toolMessages, ai.ChatCompletionOptions{})
 			if err == nil && finalRes != nil {
 				reply := finalRes.Message.GetStringContent()
-				h.sendMessage(ctx, msg, reply)
+				h.parseAndDispatchResponse(ctx, msg, reply, query, userIDStr, username, chatIDStr)
 			}
 		}
 
@@ -310,10 +308,17 @@ func (h *ConversationHandler) parseAndDispatchResponse(
 	var resp domain.StructuredAIResponse
 	err := json.Unmarshal([]byte(cleanJSON), &resp)
 	if err != nil {
-		// Fallback: treat raw string as reply text
+		// Fallback: if json parsing failed, treat cleaned raw string as reply text
+		raw := strings.TrimSpace(aiContent)
+		if idx := strings.Index(raw, "{"); idx != -1 {
+			pre := strings.TrimSpace(raw[:idx])
+			if pre != "" {
+				raw = pre
+			}
+		}
 		resp = domain.StructuredAIResponse{
 			ShouldReply: true,
-			ReplyText:   aiContent,
+			ReplyText:   raw,
 		}
 	}
 

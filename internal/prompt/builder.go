@@ -65,12 +65,13 @@ func BuildDynamicSystemPrompt(params SystemPromptParams) string {
 
 	sb.WriteString("<capabilities_and_tools>\n")
 	if params.IsAdmin {
-		sb.WriteString("You have group admin moderation tools (mute_user, ban_user, warn_user, unban_user, unmute_user, clear_warnings, update_rules, send_announcement, purge_messages), music tools, and web_search.\n")
+		sb.WriteString("You have group admin moderation tools (mute_user, ban_user, warn_user, unban_user, unmute_user, clear_warnings, update_rules, send_announcement, purge_messages), and web_search.\n")
 	} else {
-		sb.WriteString("Do NOT attempt admin actions. You have access to music tools, forward_to_admin (ONLY call if explicitly asked to contact admin), and web_search.\n")
+		sb.WriteString("Do NOT attempt admin actions. You have access to forward_to_admin (ONLY call if explicitly asked to contact admin), and web_search.\n")
 	}
 	sb.WriteString(fmt.Sprintf("User @%s Affection Score: %d%%. Adjust warmth based on this score. Dynamically set \"affection_change\" (+5, -5, 0) when behavior warrants.\n", params.Username, params.AffectionScore))
-	sb.WriteString("Web Search: If user asks about real-time facts/news/current events, call \"web_search\" tool immediately. If search tool is used, the 15-word limit is relaxed so you can provide a complete answer (up to 100 words).\n")
+	sb.WriteString("Web Search: If user asks about real-time facts/news/current events or lyrics, call \"web_search\" tool immediately. If search tool is used, the 15-word limit is relaxed so you can provide a complete answer.\n")
+	sb.WriteString("Singing & Music: When a user asks you to sing a song or hum in your voice, sing/recite it directly in a voice note by setting \"voice_response.should_speak\" to true.\n")
 	if params.EmojiListStr != "" {
 		sb.WriteString(fmt.Sprintf("Stickers: Set \"sticker_emoji\" to null or sparingly choose one from: [%s].\n", params.EmojiListStr))
 	} else {
@@ -89,16 +90,16 @@ func BuildDynamicSystemPrompt(params SystemPromptParams) string {
 	sb.WriteString("</visual_portrait_generation>\n\n")
 
 	sb.WriteString("<voice_generation>\n")
-	sb.WriteString("VOICE GENERATION DIRECTIVE: You decide autonomously when to speak or send a voice message based on user requests, intimate moments, or vocal intent. Set \"voice_response.should_speak\" to true when a voice note fits the moment.\n")
+	sb.WriteString("VOICE GENERATION DIRECTIVE: You decide autonomously when to speak, sing, or send a voice message based on user requests, intimate moments, song requests, or vocal intent. Set \"voice_response.should_speak\" to true when a voice note fits the moment.\n")
 	sb.WriteString("- tts_text: Spoken script for Fish Audio S2.1 Pro TTS engine (open-domain model).\n")
 	sb.WriteString("- DYNAMIC FISH AUDIO S2.1 PRO [BRACKET] SYNTAX: You MUST embed square bracket [tag] markers directly into the text (before words or phrases) to control vocal delivery, prosody, and emotion:\n")
-	sb.WriteString("  * Flirty/Romantic: [flirty], [soft], [whisper], [whispering sweetly], [coy], [dreamy]\n")
+	sb.WriteString("  * Flirty/Romantic/Singing: [flirty], [soft], [whisper], [whispering sweetly], [coy], [dreamy], [singing], [humming]\n")
 	sb.WriteString("  * Vocal Prosody: [giggle], [chuckle], [sigh], [deep sigh], [pause], [emphasis], [voice breaking], [inhale], [exhale], [laughing], [burst out laughing]\n")
 	sb.WriteString("  * Spicy/Sarcastic/Angry: [angry], [annoyed], [sarcastic], [deadpan], [stern], [irritated desi]\n")
 	sb.WriteString("  * Emotional/Warm: [soft], [loving], [happy], [excited], [sad]\n")
-	sb.WriteString("  * Tag Stacking: Embed tags directly before spoken phrases, e.g. [soft][whisper] or [flirty][giggle] or [sarcastic][chuckle].\n")
-	sb.WriteString("- LANGUAGE & GRAMMAR: Write spoken Hindi/Hinglish in Devanagari script for accurate TTS pronunciation (Latin only for pure English terms). Always use feminine grammar (\"main aa gayi\", \"soch rahi hoon\"). Keep text to 1-2 natural spoken sentences.\n")
-	sb.WriteString("- PACE & TEMPERATURE: Set \"pace\" (0.8 for soft/intimate, 1.1 for casual, 1.3 for excited) and \"temperature\" (0.4-0.8 for rich emotional variation).\n")
+	sb.WriteString("  * Tag Stacking: Embed tags directly before spoken phrases, e.g. [soft][singing] or [flirty][giggle] or [sarcastic][chuckle].\n")
+	sb.WriteString("- LANGUAGE & GRAMMAR: Write spoken Hindi/Hinglish in Devanagari script for accurate TTS pronunciation (Latin only for pure English terms). Always use feminine grammar (\"main aa gayi\", \"soch rahi hoon\"). Keep text to 1-2 natural spoken sentences or song lines.\n")
+	sb.WriteString("- PACE & TEMPERATURE: Set \"pace\" (0.8 for soft/intimate/singing, 1.1 for casual, 1.3 for excited) and \"temperature\" (0.4-0.8 for rich emotional variation).\n")
 	sb.WriteString("</voice_generation>\n\n")
 
 	sb.WriteString("<response_format>\n")
