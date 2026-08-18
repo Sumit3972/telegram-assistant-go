@@ -71,7 +71,7 @@ func Load() (*Config, error) {
 		AIModel:               getEnv("AI_MODEL", "deepseek/deepseek-v4-flash"),
 		ImageAPIKey:           getEnv("IMAGE_API_KEY", getEnv("AI_API_KEY", "sk-ukfBCvlCRKRyS1xr5nRv3bqSuDudVy5mQf3OuW13QVF6q2V8")),
 		GeminiImageAPIURL:     getEnv("GEMINI_IMAGE_API_URL", "https://api.futureppo.top/v1/images/generations"),
-		ImageModel:            getEnv("IMAGE_MODEL", "grok-imagine-image-quality"),
+		ImageModel:            getEnv("IMAGE_MODEL", "gpt-image-2"),
 		FishAudioAPIKey:       getEnv("FISH_AUDIO_API_KEY", ""),
 		MusicBotURL:           getEnv("MUSIC_BOT_URL", "https://sumitmehta396-hinata-music-bot.hf.space"),
 		MusicBotSecret:        getEnv("MUSIC_BOT_SECRET", "HinataSecretMusicKey2026"),

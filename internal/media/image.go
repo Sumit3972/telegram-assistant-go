@@ -24,7 +24,7 @@ func NewImageService(apiURL, apiKey string, primaryModel ...string) *ImageServic
 	if apiURL == "" {
 		apiURL = "https://api.futureppo.top/v1/images/generations"
 	}
-	model := "grok-imagine-image-quality"
+	model := "gpt-image-2"
 	if len(primaryModel) > 0 && primaryModel[0] != "" {
 		model = primaryModel[0]
 	}
@@ -68,17 +68,17 @@ func sanitizePromptForModel(model, rawPrompt string) string {
 func (s *ImageService) GenerateImage(ctx context.Context, prompt string) (*GeneratedImage, error) {
 	primary := s.primaryModel
 	if primary == "" {
-		primary = "grok-imagine-image-quality"
+		primary = "gpt-image-2"
 	}
 
 	models := []string{primary}
 	fallbacks := []string{
+		"gpt-image-2",
+		"grok-imagine-image-lite",
+		"grok-imagine-image",
 		"grok-imagine-image-quality",
 		"grok-imagine-image-quality-lite",
-		"grok-imagine-image",
-		"grok-imagine-image-lite",
 		"grok-imagine-image-edit",
-		"gpt-image-2",
 		"qwen-image-2512",
 		"z-image-turbo",
 	}
