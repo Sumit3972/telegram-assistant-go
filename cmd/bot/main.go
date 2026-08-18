@@ -80,7 +80,6 @@ func main() {
 			BaseURL: "https://gorouter.app/v1",
 			APIKey:  "sk-LlJ8vC0ociQnotHY5gFw3K6onFmXlmFSNUJs8uGOmzLPxqpM",
 			Models: []string{
-				"claude-opus-5-thinking",
 				"claude-opus-4-8",
 			},
 		},
