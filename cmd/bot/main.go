@@ -77,6 +77,13 @@ func main() {
 	// 5. Initialize AI Client
 	providers := []ai.ProviderConfig{
 		{
+			BaseURL: "https://agentrouter.org/v1",
+			APIKey:  "sk-TPUawcFJbkyiBuaBhE4Gu2TzBAVIfi7yfNBGuVbuNksqPxMt",
+			Models: []string{
+				"gpt-5.6-sol",
+			},
+		},
+		{
 			BaseURL: "https://gorouter.app/v1",
 			APIKey:  "sk-LlJ8vC0ociQnotHY5gFw3K6onFmXlmFSNUJs8uGOmzLPxqpM",
 			Models: []string{
@@ -87,12 +94,9 @@ func main() {
 			BaseURL: cfg.AIBaseURL,
 			APIKey:  cfg.AIAPIKey,
 			Models: []string{
-				cfg.AIModel,
 				"deepseek/deepseek-chat",
-				"deepseek-v3.2",
 				"deepseek-r1",
-				"google/gemini-2.5-flash-lite",
-				"openai/gpt-4.1-nano",
+				"deepseek-v3.2",
 			},
 		},
 	}

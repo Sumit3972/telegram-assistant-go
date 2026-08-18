@@ -243,7 +243,13 @@ func (c *Client) request(
 
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
-	httpReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
+	httpReq.Header.Set("HTTP-Referer", "https://github.com/RooVetGit/Roo-Code")
+	httpReq.Header.Set("X-Title", "Roo Code")
+	if strings.Contains(cleanURL, "agentrouter") {
+		httpReq.Header.Set("User-Agent", "RooCode/3.34.8")
+	} else {
+		httpReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
+	}
 	httpReq.Header.Set("Accept", "application/json, text/plain, */*")
 	httpReq.Header.Set("Accept-Language", "en-US,en;q=0.9")
 
