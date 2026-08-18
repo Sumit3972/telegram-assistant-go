@@ -119,8 +119,46 @@ func (ub *UserbotManager) Start(ctx context.Context) error {
 	dispatcher := tg.NewUpdateDispatcher()
 
 	handleMessage := func(ctx context.Context, e tg.Entities, msg *tg.Message) error {
-		if msg == nil || msg.Out {
-			return nil // ignore outgoing messages sent by self
+		if msg == nil {
+			return nil
+		}
+
+		if msg.Out {
+			// Record outgoing message from self in chat history so replies to it can be recognized
+			chatID := int64(0)
+			if peerUser, ok := msg.PeerID.(*tg.PeerUser); ok {
+				chatID = peerUser.UserID
+			} else if peerChat, ok := msg.PeerID.(*tg.PeerChat); ok {
+				chatID = peerChat.ChatID
+			} else if peerChannel, ok := msg.PeerID.(*tg.PeerChannel); ok {
+				chatID = peerChannel.ChannelID
+			}
+			if chatID != 0 && ub.onMessage != nil {
+				selfID := int64(6009675121)
+				if ub.MyUserID != "" {
+					if id, err := strconv.ParseInt(ub.MyUserID, 10, 64); err == nil && id > 0 {
+						selfID = id
+					}
+				}
+				ub.onMessage(ctx, &domain.TelegramUpdate{
+					UpdateID: msg.ID,
+					Message: &domain.TelegramMessage{
+						MessageID: msg.ID,
+						IsUserbot: true,
+						From: &domain.TelegramUser{
+							ID:        selfID,
+							FirstName: ub.MyName,
+							Username:  ub.MyUsername,
+						},
+						Chat: domain.TelegramChat{
+							ID: chatID,
+						},
+						Text: msg.Message,
+						Date: int64(msg.Date),
+					},
+				})
+			}
+			return nil
 		}
 
 		senderID := int64(0)

@@ -284,6 +284,7 @@ func (m *Moderator) isTalkingToBot(msg *domain.TelegramMessage, text string) boo
 			rUser := msg.ReplyToMessage.From
 			if (rUser.IsBot && strings.EqualFold(rUser.Username, botUname)) ||
 				fmt.Sprintf("%d", rUser.ID) == m.cfg.MyPersonalUserID ||
+				(rUser.ID != 0 && (fmt.Sprintf("%d", rUser.ID) == "6009675121" || fmt.Sprintf("%d", rUser.ID) == "8542441463")) ||
 				(botUname != "" && strings.EqualFold(rUser.Username, botUname)) {
 				return true
 			}
@@ -295,6 +296,12 @@ func (m *Moderator) isTalkingToBot(msg *domain.TelegramMessage, text string) boo
 			replyIDStr := strconv.Itoa(msg.ReplyToMessage.MessageID)
 			if isBotMsg, err := m.historyRepo.IsMessageFromBotOrAssistant(
 				context.Background(), chatIDStr, replyIDStr, m.cfg.MyPersonalUserID, m.cfg.MyPersonalUsername,
+			); err == nil && isBotMsg {
+				return true
+			}
+			// Also check fallback with fixed ID 6009675121
+			if isBotMsg, err := m.historyRepo.IsMessageFromBotOrAssistant(
+				context.Background(), chatIDStr, replyIDStr, "6009675121", "Chvai396",
 			); err == nil && isBotMsg {
 				return true
 			}

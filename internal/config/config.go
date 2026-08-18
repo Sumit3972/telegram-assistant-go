@@ -65,7 +65,7 @@ func Load() (*Config, error) {
 		TelegramSessionString: getEnv("TELEGRAM_SESSION_STRING", ""),
 		MyPersonalName:        getEnv("MY_PERSONAL_NAME", "Chavi Sharma"),
 		MyPersonalUsername:    strings.TrimPrefix(getEnv("MY_PERSONAL_USERNAME", "Chvai396"), "@"),
-		MyPersonalUserID:      getEnv("MY_PERSONAL_USER_ID", "8542441463"),
+		MyPersonalUserID:      getEnv("MY_PERSONAL_USER_ID", "6009675121"),
 		AIBaseURL:             getEnv("AI_BASE_URL", "https://run.forgeapi.org/v1"),
 		AIAPIKey:              getEnv("AI_API_KEY", "fg-live-NDg5MTE2YjgtNmJlMC00Njk2LWEwNDItNjc5ZDFlZDQzYjJlfHN1bWl0bWVodGEzOTZAZ21haWwuY29tfDE3ODcwMjUyNzExNDZ8MA.8afc4bf3621a1317b874"),
 		AIModel:               getEnv("AI_MODEL", "deepseek/deepseek-v4-flash"),
