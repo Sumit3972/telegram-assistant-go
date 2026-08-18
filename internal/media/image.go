@@ -21,9 +21,9 @@ type ImageService struct {
 
 func NewImageService(apiURL, apiKey string, primaryModel ...string) *ImageService {
 	if apiURL == "" {
-		apiURL = "https://api.anyapi.ai/v1/images/generations"
+		apiURL = "https://api.futureppo.top/v1/images/generations"
 	}
-	model := "openai/gpt-5-image-mini"
+	model := "gpt-image-2"
 	if len(primaryModel) > 0 && primaryModel[0] != "" {
 		model = primaryModel[0]
 	}
@@ -44,15 +44,15 @@ type GeneratedImage struct {
 func (s *ImageService) GenerateImage(ctx context.Context, prompt string) (*GeneratedImage, error) {
 	primary := s.primaryModel
 	if primary == "" {
-		primary = "openai/gpt-5-image-mini"
+		primary = "gpt-image-2"
 	}
 
 	models := []string{primary}
 	fallbacks := []string{
-		"openai/gpt-5-image",
-		"google/gemini-3-pro-image",
-		"google/gemini-3.1-flash-image-preview",
-		
+		"qwen-image-2512",
+		"z-image-turbo",
+		"grok-imagine-image",
+		"grok-imagine-image-lite",
 	}
 	for _, m := range fallbacks {
 		if m != primary {
@@ -63,8 +63,8 @@ func (s *ImageService) GenerateImage(ctx context.Context, prompt string) (*Gener
 	fullPrompt := prompt + ", 8K UHD, masterpiece, award-winning editorial portrait photography, crystal clear sharp focus, natural skin texture with realistic micro-pores, soft cinematic lighting, rich colors, zero watermark, no blur, no grain"
 
 	var lastErr error
-	for _, model := range models {
-		log.Printf("[ImageService] Generating image via %s...", model)
+	for i, model := range models {
+		log.Printf("[ImageService] Generating image via %s (attempt %d/%d)...", model, i+1, len(models))
 
 		reqBody := map[string]any{
 			"model":           model,
@@ -78,6 +78,7 @@ func (s *ImageService) GenerateImage(ctx context.Context, prompt string) (*Gener
 		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, s.apiURL, bytes.NewReader(bodyBytes))
 		if err != nil {
 			lastErr = err
+			s.fallbackDelay(ctx, i, len(models))
 			continue
 		}
 
@@ -88,6 +89,7 @@ func (s *ImageService) GenerateImage(ctx context.Context, prompt string) (*Gener
 		if err != nil {
 			log.Printf("[ImageService] Model %s failed: %v", model, err)
 			lastErr = err
+			s.fallbackDelay(ctx, i, len(models))
 			continue
 		}
 
@@ -98,6 +100,7 @@ func (s *ImageService) GenerateImage(ctx context.Context, prompt string) (*Gener
 			errStr := string(respBytes)
 			log.Printf("[ImageService] Model %s HTTP %d: %s", model, resp.StatusCode, errStr)
 			lastErr = fmt.Errorf("HTTP %d: %s", resp.StatusCode, errStr)
+			s.fallbackDelay(ctx, i, len(models))
 			continue
 		}
 
@@ -137,12 +140,24 @@ func (s *ImageService) GenerateImage(ctx context.Context, prompt string) (*Gener
 		}
 
 		lastErr = fmt.Errorf("unexpected image response: %s", string(respBytes))
+		s.fallbackDelay(ctx, i, len(models))
 	}
 
 	if lastErr != nil {
 		return nil, lastErr
 	}
 	return nil, fmt.Errorf("all image models failed")
+}
+
+func (s *ImageService) fallbackDelay(ctx context.Context, currentIndex, totalModels int) {
+	if currentIndex < totalModels-1 {
+		delay := 6 * time.Second
+		log.Printf("⏳ [ImageService] Waiting %v before switching to next fallback image model...", delay)
+		select {
+		case <-ctx.Done():
+		case <-time.After(delay):
+		}
+	}
 }
 
 func (s *ImageService) downloadImage(ctx context.Context, imgURL string) ([]byte, error) {

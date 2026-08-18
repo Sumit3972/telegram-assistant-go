@@ -156,17 +156,17 @@ func (c *Client) executeCandidates(
 	}
 
 	var lastErr error
-	for _, cand := range toTry {
+	for i, cand := range toTry {
 		// Skip text-only models for vision requests
 		if isVision {
 			lm := strings.ToLower(cand.Model)
-			if strings.Contains(lm, "deepseek") || strings.Contains(lm, "grok-composer") || strings.Contains(lm, "doubao-seed") {
+			if strings.Contains(lm, "deepseek") || strings.Contains(lm, "minimax") || strings.Contains(lm, "zinc") || strings.Contains(lm, "hy3") || strings.Contains(lm, "grok-composer") || strings.Contains(lm, "doubao-seed") {
 				continue
 			}
 		}
 
 		startTime := time.Now()
-		log.Printf("[AIClient] Attempting completion via %s with model %s...", cand.Provider.BaseURL, cand.Model)
+		log.Printf("[AIClient] Attempting completion via %s with model %s (candidate %d/%d)...", cand.Provider.BaseURL, cand.Model, i+1, len(toTry))
 
 		msg, err := c.request(ctx, cand.Provider.BaseURL, cand.Provider.APIKey, cand.Model, messages, opts)
 		latency := time.Since(startTime).Milliseconds()
@@ -187,6 +187,15 @@ func (c *Client) executeCandidates(
 		lastErr = err
 		log.Printf("[AIClient] Model %s (%s) failed (%dms): %v", cand.Model, cand.Provider.BaseURL, latency, err)
 		c.cooldownMgr.PutOnCooldown(cand.Provider.BaseURL, cand.Model, 1*time.Minute, cand.Provider.APIKey)
+
+		if i < len(toTry)-1 {
+			log.Printf("⏳ [AIClient] Waiting 5s before switching to fallback model...")
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(5 * time.Second):
+			}
+		}
 	}
 
 	if lastErr != nil {

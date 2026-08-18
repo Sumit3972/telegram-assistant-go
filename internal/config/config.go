@@ -23,6 +23,7 @@ type Config struct {
 	AIBaseURL             string
 	AIAPIKey              string
 	AIModel               string
+	ImageAPIKey           string
 	GeminiImageAPIURL     string
 	ImageModel            string
 	FishAudioAPIKey       string
@@ -65,11 +66,12 @@ func Load() (*Config, error) {
 		MyPersonalName:        getEnv("MY_PERSONAL_NAME", "Janvi"),
 		MyPersonalUsername:    strings.TrimPrefix(getEnv("MY_PERSONAL_USERNAME", "Janvi3976"), "@"),
 		MyPersonalUserID:      getEnv("MY_PERSONAL_USER_ID", "8542441463"),
-		AIBaseURL:             getEnv("AI_BASE_URL", "https://api.anyapi.ai/v1"),
-		AIAPIKey:              getEnv("AI_API_KEY", "sk-1p13iZ5fw3RMfwVjUZbE1g"),
+		AIBaseURL:             getEnv("AI_BASE_URL", "https://run.forgeapi.org/v1"),
+		AIAPIKey:              getEnv("AI_API_KEY", "fg-live-NDg5MTE2YjgtNmJlMC00Njk2LWEwNDItNjc5ZDFlZDQzYjJlfHN1bWl0bWVodGEzOTZAZ21haWwuY29tfDE3ODcwMjUyNzExNDZ8MA.8afc4bf3621a1317b874"),
 		AIModel:               getEnv("AI_MODEL", "deepseek/deepseek-v4-flash-0731"),
-		GeminiImageAPIURL:     getEnv("GEMINI_IMAGE_API_URL", "https://api.anyapi.ai/v1/images/generations"),
-		ImageModel:            getEnv("IMAGE_MODEL", "openai/gpt-5-image-mini"),
+		ImageAPIKey:           getEnv("IMAGE_API_KEY", getEnv("AI_API_KEY", "sk-ukfBCvlCRKRyS1xr5nRv3bqSuDudVy5mQf3OuW13QVF6q2V8")),
+		GeminiImageAPIURL:     getEnv("GEMINI_IMAGE_API_URL", "https://api.futureppo.top/v1/images/generations"),
+		ImageModel:            getEnv("IMAGE_MODEL", "gpt-image-2"),
 		FishAudioAPIKey:       getEnv("FISH_AUDIO_API_KEY", ""),
 		MusicBotURL:           getEnv("MUSIC_BOT_URL", "https://sumitmehta396-hinata-music-bot.hf.space"),
 		MusicBotSecret:        getEnv("MUSIC_BOT_SECRET", "HinataSecretMusicKey2026"),

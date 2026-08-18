@@ -16,26 +16,26 @@ import (
 )
 
 type Moderator struct {
-	cfg          *config.Config
-	groupRepo    domain.GroupRepository
-	adminRepo    domain.AdminRepository
-	warningRepo  domain.WarningRepository
-	modLogRepo   domain.ModerationLogRepository
-	historyRepo  domain.HistoryRepository
-	karmaRepo    domain.KarmaRepository
-	captchaRepo  domain.CaptchaRepository
-	mentionRepo  domain.MentionRepository
-	relRepo      domain.RelationshipRepository
-	shipRepo     domain.ShipRepository
-	apiKeyRepo   domain.ApiKeyRepository
-	perfRepo     domain.PerformanceRepository
+	cfg         *config.Config
+	groupRepo   domain.GroupRepository
+	adminRepo   domain.AdminRepository
+	warningRepo domain.WarningRepository
+	modLogRepo  domain.ModerationLogRepository
+	historyRepo domain.HistoryRepository
+	karmaRepo   domain.KarmaRepository
+	captchaRepo domain.CaptchaRepository
+	mentionRepo domain.MentionRepository
+	relRepo     domain.RelationshipRepository
+	shipRepo    domain.ShipRepository
+	apiKeyRepo  domain.ApiKeyRepository
+	perfRepo    domain.PerformanceRepository
 
-	botClient    *telegram.BotClient
-	aiClient     *ai.Client
-	imageService *media.ImageService
-	voiceService *media.VoiceService
+	botClient     *telegram.BotClient
+	aiClient      *ai.Client
+	imageService  *media.ImageService
+	voiceService  *media.VoiceService
 	searchService *media.SearchService
-	musicService *media.MusicService
+	musicService  *media.MusicService
 
 	karmaHandler   *KarmaHandler
 	captchaHandler *CaptchaHandler
@@ -64,31 +64,35 @@ func NewModerator(
 	botClient *telegram.BotClient,
 	aiClient *ai.Client,
 ) *Moderator {
-	imgService := media.NewImageService(cfg.GeminiImageAPIURL, cfg.AIAPIKey, cfg.ImageModel)
+	imageKey := cfg.ImageAPIKey
+	if imageKey == "" {
+		imageKey = cfg.AIAPIKey
+	}
+	imgService := media.NewImageService(cfg.GeminiImageAPIURL, imageKey, cfg.ImageModel)
 	voiceService := media.NewVoiceService(cfg.FishAudioAPIKey)
 	searchService := media.NewSearchService(cfg.TavilyAPIKey)
 	musicService := media.NewMusicService(cfg.MusicBotURL, cfg.MusicBotSecret)
 
 	return &Moderator{
-		cfg:          cfg,
-		groupRepo:    groupRepo,
-		adminRepo:    adminRepo,
-		warningRepo:  warningRepo,
-		modLogRepo:   modLogRepo,
-		historyRepo:  historyRepo,
-		karmaRepo:    karmaRepo,
-		captchaRepo:  captchaRepo,
-		mentionRepo:  mentionRepo,
-		relRepo:      relRepo,
-		shipRepo:     shipRepo,
-		apiKeyRepo:   apiKeyRepo,
-		perfRepo:     perfRepo,
-		botClient:    botClient,
-		aiClient:     aiClient,
-		imageService: imgService,
-		voiceService: voiceService,
+		cfg:           cfg,
+		groupRepo:     groupRepo,
+		adminRepo:     adminRepo,
+		warningRepo:   warningRepo,
+		modLogRepo:    modLogRepo,
+		historyRepo:   historyRepo,
+		karmaRepo:     karmaRepo,
+		captchaRepo:   captchaRepo,
+		mentionRepo:   mentionRepo,
+		relRepo:       relRepo,
+		shipRepo:      shipRepo,
+		apiKeyRepo:    apiKeyRepo,
+		perfRepo:      perfRepo,
+		botClient:     botClient,
+		aiClient:      aiClient,
+		imageService:  imgService,
+		voiceService:  voiceService,
 		searchService: searchService,
-		musicService: musicService,
+		musicService:  musicService,
 
 		karmaHandler:   NewKarmaHandler(karmaRepo, botClient),
 		captchaHandler: NewCaptchaHandler(captchaRepo, botClient),

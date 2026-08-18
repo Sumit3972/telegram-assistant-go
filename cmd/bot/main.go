@@ -81,11 +81,11 @@ func main() {
 			APIKey:  cfg.AIAPIKey,
 			Models: []string{
 				cfg.AIModel,
-				"x-ai/grok-4.3",
-				"google/gemini-3.5-flash",
-				"openai/gpt-5.6-luna",
-				"openai/gpt-5.4-mini",
 				"qwen/qwen3.7-flash",
+				"deepseek-v3.2",
+				"google/gemini-2.5-flash-lite",
+				"openai/gpt-4.1-nano",
+				"MiniMax-M2.5",
 			},
 		},
 	}
