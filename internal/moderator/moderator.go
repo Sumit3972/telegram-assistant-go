@@ -236,9 +236,13 @@ func (m *Moderator) HandleUpdate(ctx context.Context, update *domain.TelegramUpd
 		return
 	}
 
-	// 11. Check if talking to Janvi
-	if m.isTalkingToBot(msg, text) {
+	// 11. Check if talking to Chavi
+	triggered := m.isTalkingToBot(msg, text)
+	if triggered {
+		log.Printf("[Moderator] Group message triggered AI conversation in chat %s: %q", chatIDStr, text)
 		go m.convHandler.HandleConversation(context.Background(), msg, isAdmin)
+	} else {
+		log.Printf("[Moderator] Group message skipped (not directed at bot) in chat %s: %q", chatIDStr, text)
 	}
 }
 
@@ -305,6 +309,26 @@ func (m *Moderator) isTalkingToBot(msg *domain.TelegramMessage, text string) boo
 			if isBotMsg, err := m.historyRepo.IsMessageFromBotOrAssistant(
 				context.Background(), chatIDStr, replyIDStr, m.cfg.MyPersonalUserID, m.cfg.MyPersonalUsername,
 			); err == nil && isBotMsg {
+				return true
+			}
+		}
+	}
+
+	// 5. Active Userbot Conversation Session (if userbot spoke in this chat within last 5 minutes)
+	if msg.IsUserbot {
+		chatIDStr := fmt.Sprintf("%d", msg.Chat.ID)
+		recentCutoff := time.Now().Add(-5 * time.Minute).Unix()
+		if isActive, err := m.historyRepo.IsAdminActiveSince(context.Background(), chatIDStr, "assistant", recentCutoff); err == nil && isActive {
+			return true
+		}
+
+		// Also check 2nd-person address or direct dialogue cues
+		directDialogue := []string{
+			"tu ", "tu?", "tu!", "tujhe", "tera", "teri", "tere", "tum ", "tumhe", "tumhara",
+			"hijju", "real se aa", "fake", "marja", "sharm", "aukaat", "apna", "apni",
+		}
+		for _, d := range directDialogue {
+			if strings.Contains(lowerText, d) {
 				return true
 			}
 		}
