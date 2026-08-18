@@ -81,11 +81,11 @@ func main() {
 			APIKey:  cfg.AIAPIKey,
 			Models: []string{
 				cfg.AIModel,
-				"qwen/qwen3.7-flash",
+				"deepseek/deepseek-chat",
 				"deepseek-v3.2",
+				"deepseek-r1",
 				"google/gemini-2.5-flash-lite",
 				"openai/gpt-4.1-nano",
-				"MiniMax-M2.5",
 			},
 		},
 	}
