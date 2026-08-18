@@ -202,9 +202,20 @@ func (ub *UserbotManager) Start(ctx context.Context) error {
 			}
 		}
 
+		if inputPeer == nil && senderID > 0 {
+			inputPeer = &tg.InputPeerUserFromMessage{
+				Peer:   &tg.InputPeerSelf{},
+				MsgID:  msg.ID,
+				UserID: senderID,
+			}
+		}
+
 		if inputPeer != nil {
 			ub.peerMu.Lock()
 			ub.peerCache[chatID] = inputPeer
+			if senderID > 0 {
+				ub.peerCache[senderID] = inputPeer
+			}
 			ub.peerMu.Unlock()
 		}
 
@@ -435,7 +446,13 @@ func (ub *UserbotManager) SendMessage(ctx context.Context, chatID int64, text st
 	}
 
 	peer, err := ub.getInputPeer(ctx, chatID)
-	if err != nil {
+	if err != nil && replyToID > 0 {
+		peer = &tg.InputPeerUserFromMessage{
+			Peer:   &tg.InputPeerSelf{},
+			MsgID:  replyToID,
+			UserID: chatID,
+		}
+	} else if err != nil {
 		return err
 	}
 
@@ -444,6 +461,21 @@ func (ub *UserbotManager) SendMessage(ctx context.Context, chatID int64, text st
 		_, sendErr = snd.To(peer).Reply(replyToID).Text(ctx, text)
 	} else {
 		_, sendErr = snd.To(peer).Text(ctx, text)
+	}
+
+	// If sendErr is PEER_ID_INVALID and replyToID > 0, retry with InputPeerUserFromMessage
+	if sendErr != nil && replyToID > 0 {
+		fallbackPeer := &tg.InputPeerUserFromMessage{
+			Peer:   &tg.InputPeerSelf{},
+			MsgID:  replyToID,
+			UserID: chatID,
+		}
+		_, sendErr = snd.To(fallbackPeer).Reply(replyToID).Text(ctx, text)
+		if sendErr == nil {
+			ub.peerMu.Lock()
+			ub.peerCache[chatID] = fallbackPeer
+			ub.peerMu.Unlock()
+		}
 	}
 
 	if sendErr != nil {
