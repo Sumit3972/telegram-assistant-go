@@ -358,7 +358,32 @@ func (ub *UserbotManager) getInputPeer(ctx context.Context, chatID int64) (tg.In
 		}
 	}
 
-	return nil, fmt.Errorf("no cached or resolvable peer found for chat ID %d", chatID)
+	ub.senderMu.RLock()
+	rawAPI := ub.rawAPI
+	ub.senderMu.RUnlock()
+
+	if rawAPI != nil {
+		// 4. Try querying Telegram UsersGetUsers directly
+		res, err := rawAPI.UsersGetUsers(ctx, []tg.InputUserClass{
+			&tg.InputUser{UserID: chatID, AccessHash: 0},
+		})
+		if err == nil && len(res) > 0 {
+			if u, ok := res[0].AsNotEmpty(); ok {
+				accessHash, _ := u.GetAccessHash()
+				inputPeer := &tg.InputPeerUser{
+					UserID:     u.GetID(),
+					AccessHash: accessHash,
+				}
+				ub.peerMu.Lock()
+				ub.peerCache[chatID] = inputPeer
+				ub.peerMu.Unlock()
+				return inputPeer, nil
+			}
+		}
+	}
+
+	// 5. Fallback: Default InputPeerUser
+	return &tg.InputPeerUser{UserID: chatID, AccessHash: 0}, nil
 }
 
 // SendMessage sends a text message from the real personal account via MTProto.
