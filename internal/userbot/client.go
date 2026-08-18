@@ -173,6 +173,32 @@ func (ub *UserbotManager) Start(ctx context.Context) error {
 		log.Printf("[Userbot MTProto Message] chat=%d (%s), from=%s (@%s, ID: %d), text=%q",
 			chatID, chatType, firstName, username, senderID, msg.Message)
 
+		var replyToMsg *domain.TelegramMessage
+		if msg.ReplyTo != nil {
+			if header, ok := msg.ReplyTo.(*tg.MessageReplyHeader); ok && header.ReplyToMsgID > 0 {
+				replySenderID := int64(0)
+				replyUsername := ""
+				replyFirstName := ""
+				if header.ReplyToPeerID != nil {
+					if peerUser, ok := header.ReplyToPeerID.(*tg.PeerUser); ok {
+						replySenderID = peerUser.UserID
+						if u, ok := e.Users[replySenderID]; ok {
+							replyUsername = u.Username
+							replyFirstName = u.FirstName
+						}
+					}
+				}
+				replyToMsg = &domain.TelegramMessage{
+					MessageID: header.ReplyToMsgID,
+					From: &domain.TelegramUser{
+						ID:        replySenderID,
+						Username:  replyUsername,
+						FirstName: replyFirstName,
+					},
+				}
+			}
+		}
+
 		update := &domain.TelegramUpdate{
 			UpdateID: msg.ID,
 			Message: &domain.TelegramMessage{
@@ -190,8 +216,9 @@ func (ub *UserbotManager) Start(ctx context.Context) error {
 					FirstName: firstName,
 					Username:  username,
 				},
-				Text: msg.Message,
-				Date: int64(msg.Date),
+				ReplyToMessage: replyToMsg,
+				Text:           msg.Message,
+				Date:           int64(msg.Date),
 			},
 		}
 
@@ -494,7 +521,9 @@ func (ub *UserbotManager) IsTriggered(text string, isPrivate bool, replyToUserID
 	}
 
 	nameLower := strings.ToLower(ub.MyName)
-	if strings.Contains(lower, nameLower) || strings.Contains(lower, "janvi") || strings.Contains(lower, "jaanvi") || strings.Contains(lower, "jhanvi") {
+	if strings.Contains(lower, nameLower) ||
+		strings.Contains(lower, "janvi") || strings.Contains(lower, "jaanvi") || strings.Contains(lower, "jhanvi") ||
+		strings.Contains(lower, "chavi") || strings.Contains(lower, "chhavi") || strings.Contains(lower, "chabi") || strings.Contains(lower, "chaavi") {
 		return true
 	}
 

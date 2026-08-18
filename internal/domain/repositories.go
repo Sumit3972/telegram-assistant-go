@@ -36,6 +36,7 @@ type HistoryRepository interface {
 	GetRecentMessages(ctx context.Context, chatID string, limit int) ([]ChatMessageLog, error)
 	ResolveUserIdentifier(ctx context.Context, chatID, identifier string) (userID, username string, err error)
 	IsAdminActiveSince(ctx context.Context, chatID, adminID string, sinceTime int64) (bool, error)
+	IsMessageFromBotOrAssistant(ctx context.Context, chatID, messageID, botUserID, botUsername string) (bool, error)
 }
 
 type KarmaRepository interface {

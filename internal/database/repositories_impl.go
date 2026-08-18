@@ -340,6 +340,22 @@ func (r *historyRepo) IsAdminActiveSince(ctx context.Context, chatID, adminID st
 	return exists, err
 }
 
+func (r *historyRepo) IsMessageFromBotOrAssistant(ctx context.Context, chatID, messageID, botUserID, botUsername string) (bool, error) {
+	if messageID == "" {
+		return false, nil
+	}
+	cleanUsername := strings.ToLower(strings.TrimPrefix(botUsername, "@"))
+	var exists bool
+	err := r.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM chat_history
+			WHERE chat_id = $1 AND message_id = $2
+			  AND (user_id = 'assistant' OR user_id = $3 OR LOWER(username) = $4)
+		)
+	`, chatID, messageID, botUserID, cleanUsername).Scan(&exists)
+	return exists, err
+}
+
 // --- Karma Repository ---
 
 type karmaRepo struct {

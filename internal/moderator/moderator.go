@@ -248,25 +248,47 @@ func (m *Moderator) isTalkingToBot(msg *domain.TelegramMessage, text string) boo
 	}
 
 	lowerText := strings.ToLower(text)
-	botUname := strings.ToLower(m.cfg.MyPersonalUsername)
+	botUname := strings.ToLower(strings.TrimPrefix(m.cfg.MyPersonalUsername, "@"))
 	botName := strings.ToLower(m.cfg.MyPersonalName)
 
-	// Check mention of username
-	if botUname != "" && strings.Contains(lowerText, "@"+botUname) {
+	// 1. Check mention of username (@Janvi3976 or username string)
+	if botUname != "" && (strings.Contains(lowerText, "@"+botUname) || strings.Contains(lowerText, botUname)) {
 		return true
 	}
 
-	// Check mention of name
-	if strings.Contains(lowerText, botName) || strings.Contains(lowerText, "janvi") || strings.Contains(lowerText, "jaanvi") || strings.Contains(lowerText, "jhanvi") {
-		return true
+	// 2. Check mention of name (Janvi, Chavi, and common phonetic variations)
+	nameTriggers := []string{
+		botName,
+		"janvi", "jaanvi", "jhanvi", "zanvi", "janu", "jaanu",
+		"chavi", "chhavi", "chabi", "chaavi", "chhabbi", "chhabee",
 	}
-
-	// Check reply to her
-	if msg.ReplyToMessage != nil && msg.ReplyToMessage.From != nil {
-		rUser := msg.ReplyToMessage.From
-		if (rUser.IsBot && strings.EqualFold(rUser.Username, botUname)) ||
-			fmt.Sprintf("%d", rUser.ID) == m.cfg.MyPersonalUserID {
+	for _, n := range nameTriggers {
+		if n != "" && strings.Contains(lowerText, n) {
 			return true
+		}
+	}
+
+	// 3. Check reply to her message
+	if msg.ReplyToMessage != nil {
+		// A. Check by From user metadata if present
+		if msg.ReplyToMessage.From != nil {
+			rUser := msg.ReplyToMessage.From
+			if (rUser.IsBot && strings.EqualFold(rUser.Username, botUname)) ||
+				fmt.Sprintf("%d", rUser.ID) == m.cfg.MyPersonalUserID ||
+				(botUname != "" && strings.EqualFold(rUser.Username, botUname)) {
+				return true
+			}
+		}
+
+		// B. Check by ReplyToMessage.MessageID in chat_history database
+		if msg.ReplyToMessage.MessageID > 0 {
+			chatIDStr := fmt.Sprintf("%d", msg.Chat.ID)
+			replyIDStr := strconv.Itoa(msg.ReplyToMessage.MessageID)
+			if isBotMsg, err := m.historyRepo.IsMessageFromBotOrAssistant(
+				context.Background(), chatIDStr, replyIDStr, m.cfg.MyPersonalUserID, m.cfg.MyPersonalUsername,
+			); err == nil && isBotMsg {
+				return true
+			}
 		}
 	}
 
