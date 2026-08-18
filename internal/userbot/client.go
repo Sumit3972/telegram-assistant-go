@@ -16,6 +16,7 @@ import (
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/message"
 	"github.com/gotd/td/telegram/message/styling"
+	"github.com/gotd/td/telegram/peers"
 	"github.com/gotd/td/telegram/updates"
 	"github.com/gotd/td/telegram/uploader"
 	"github.com/gotd/td/tg"
@@ -44,6 +45,7 @@ type UserbotManager struct {
 	sender   *message.Sender
 	uploader *uploader.Uploader
 	rawAPI   *tg.Client
+	peers    *peers.Manager
 }
 
 func NewUserbotManager(cfg *config.Config, botClient *telegramBot.BotClient, onMessage func(ctx context.Context, update *domain.TelegramUpdate)) *UserbotManager {
@@ -235,11 +237,14 @@ func (ub *UserbotManager) Start(ctx context.Context) error {
 				rawAPI := tg.NewClient(client)
 				snd := message.NewSender(rawAPI)
 				upld := uploader.NewUploader(rawAPI)
+				peersMgr := peers.Options{}.Build(rawAPI)
+				_ = peersMgr.Init(ctx)
 
 				ub.senderMu.Lock()
 				ub.rawAPI = rawAPI
 				ub.sender = snd
 				ub.uploader = upld
+				ub.peers = peersMgr
 				ub.senderMu.Unlock()
 
 				log.Printf("🎉 [Userbot MTProto] Connected and actively listening for messages sent to @%s (%s)!", ub.MyUsername, ub.MyName)
@@ -249,6 +254,7 @@ func (ub *UserbotManager) Start(ctx context.Context) error {
 				ub.rawAPI = nil
 				ub.sender = nil
 				ub.uploader = nil
+				ub.peers = nil
 				ub.senderMu.Unlock()
 
 				return ctx.Err()
@@ -271,6 +277,50 @@ func (ub *UserbotManager) IsAvailable() bool {
 	return ub.sender != nil
 }
 
+// getInputPeer retrieves or dynamically resolves the InputPeer for a given chat ID.
+func (ub *UserbotManager) getInputPeer(ctx context.Context, chatID int64) (tg.InputPeerClass, error) {
+	ub.peerMu.RLock()
+	peer, exists := ub.peerCache[chatID]
+	ub.peerMu.RUnlock()
+
+	if exists && peer != nil {
+		return peer, nil
+	}
+
+	ub.senderMu.RLock()
+	peersMgr := ub.peers
+	ub.senderMu.RUnlock()
+
+	if peersMgr != nil {
+		// 1. Try resolving as user
+		if u, err := peersMgr.ResolveUserID(ctx, chatID); err == nil {
+			inputPeer := u.InputPeer()
+			ub.peerMu.Lock()
+			ub.peerCache[chatID] = inputPeer
+			ub.peerMu.Unlock()
+			return inputPeer, nil
+		}
+		// 2. Try resolving as chat
+		if p, err := peersMgr.ResolvePeer(ctx, &tg.PeerChat{ChatID: chatID}); err == nil && p != nil {
+			inputPeer := p.InputPeer()
+			ub.peerMu.Lock()
+			ub.peerCache[chatID] = inputPeer
+			ub.peerMu.Unlock()
+			return inputPeer, nil
+		}
+		// 3. Try resolving as channel/supergroup
+		if p, err := peersMgr.ResolvePeer(ctx, &tg.PeerChannel{ChannelID: chatID}); err == nil && p != nil {
+			inputPeer := p.InputPeer()
+			ub.peerMu.Lock()
+			ub.peerCache[chatID] = inputPeer
+			ub.peerMu.Unlock()
+			return inputPeer, nil
+		}
+	}
+
+	return nil, fmt.Errorf("no cached or resolvable peer found for chat ID %d", chatID)
+}
+
 // SendMessage sends a text message from the real personal account via MTProto.
 func (ub *UserbotManager) SendMessage(ctx context.Context, chatID int64, text string, replyToID int) error {
 	ub.senderMu.RLock()
@@ -281,23 +331,20 @@ func (ub *UserbotManager) SendMessage(ctx context.Context, chatID int64, text st
 		return fmt.Errorf("userbot MTProto client is not connected")
 	}
 
-	ub.peerMu.RLock()
-	peer, exists := ub.peerCache[chatID]
-	ub.peerMu.RUnlock()
-
-	if !exists || peer == nil {
-		return fmt.Errorf("no cached peer found for chat ID %d", chatID)
-	}
-
-	var err error
-	if replyToID > 0 {
-		_, err = snd.To(peer).Reply(replyToID).Text(ctx, text)
-	} else {
-		_, err = snd.To(peer).Text(ctx, text)
-	}
-
+	peer, err := ub.getInputPeer(ctx, chatID)
 	if err != nil {
-		return fmt.Errorf("MTProto SendMessage error: %w", err)
+		return err
+	}
+
+	var sendErr error
+	if replyToID > 0 {
+		_, sendErr = snd.To(peer).Reply(replyToID).Text(ctx, text)
+	} else {
+		_, sendErr = snd.To(peer).Text(ctx, text)
+	}
+
+	if sendErr != nil {
+		return fmt.Errorf("MTProto SendMessage error: %w", sendErr)
 	}
 	return nil
 }
@@ -313,12 +360,9 @@ func (ub *UserbotManager) SendPhoto(ctx context.Context, chatID int64, photoData
 		return fmt.Errorf("userbot MTProto client is not connected")
 	}
 
-	ub.peerMu.RLock()
-	peer, exists := ub.peerCache[chatID]
-	ub.peerMu.RUnlock()
-
-	if !exists || peer == nil {
-		return fmt.Errorf("no cached peer found for chat ID %d", chatID)
+	peer, err := ub.getInputPeer(ctx, chatID)
+	if err != nil {
+		return err
 	}
 
 	if len(photoData) > 0 && upld != nil {
@@ -368,12 +412,9 @@ func (ub *UserbotManager) SendVoice(ctx context.Context, chatID int64, voiceData
 		return fmt.Errorf("userbot MTProto client is not connected")
 	}
 
-	ub.peerMu.RLock()
-	peer, exists := ub.peerCache[chatID]
-	ub.peerMu.RUnlock()
-
-	if !exists || peer == nil {
-		return fmt.Errorf("no cached peer found for chat ID %d", chatID)
+	peer, err := ub.getInputPeer(ctx, chatID)
+	if err != nil {
+		return err
 	}
 
 	upload, err := upld.FromBytes(ctx, "voice.ogg", voiceData)
@@ -401,15 +442,12 @@ func (ub *UserbotManager) SetReaction(ctx context.Context, chatID int64, msgID i
 		return fmt.Errorf("userbot MTProto client is not connected")
 	}
 
-	ub.peerMu.RLock()
-	peer, exists := ub.peerCache[chatID]
-	ub.peerMu.RUnlock()
-
-	if !exists || peer == nil {
-		return fmt.Errorf("no cached peer found for chat ID %d", chatID)
+	peer, err := ub.getInputPeer(ctx, chatID)
+	if err != nil {
+		return err
 	}
 
-	_, err := rawAPI.MessagesSendReaction(ctx, &tg.MessagesSendReactionRequest{
+	_, err = rawAPI.MessagesSendReaction(ctx, &tg.MessagesSendReactionRequest{
 		Peer:  peer,
 		MsgID: msgID,
 		Reaction: []tg.ReactionClass{
