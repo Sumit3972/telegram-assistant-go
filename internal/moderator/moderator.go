@@ -251,14 +251,21 @@ func (m *Moderator) isTalkingToBot(msg *domain.TelegramMessage, text string) boo
 	botUname := strings.ToLower(strings.TrimPrefix(m.cfg.MyPersonalUsername, "@"))
 	botName := strings.ToLower(m.cfg.MyPersonalName)
 
-	// 1. Check mention of username (@Janvi3976 or username string)
-	if botUname != "" && (strings.Contains(lowerText, "@"+botUname) || strings.Contains(lowerText, botUname)) {
-		return true
+	// 1. Check mention of usernames
+	userNames := []string{
+		botUname,
+		"janvi3976", "sumit3972",
+	}
+	for _, u := range userNames {
+		if u != "" && (strings.Contains(lowerText, "@"+u) || strings.Contains(lowerText, u)) {
+			return true
+		}
 	}
 
-	// 2. Check mention of name (Janvi, Chavi, and common phonetic variations)
+	// 2. Check mention of name (Janvi, Sumit, Chavi, and common variations)
 	nameTriggers := []string{
 		botName,
+		"sumit", "sumeet", "shumit", "amit",
 		"janvi", "jaanvi", "jhanvi", "zanvi", "janu", "jaanu",
 		"chavi", "chhavi", "chabi", "chaavi", "chhabbi", "chhabee",
 	}
@@ -268,7 +275,20 @@ func (m *Moderator) isTalkingToBot(msg *domain.TelegramMessage, text string) boo
 		}
 	}
 
-	// 3. Check reply to her message
+	// 3. Check direct conversational questions/prompts in group chats
+	convTriggers := []string{
+		"tu kon", "kon hai", "kaun hai", "who are you",
+		"kya kar rahi", "kya kar raha", "kaisi ho", "kaisa hai",
+		"photo bhej", "pic bhej", "selfie bhej", "song sunao", "voice sunao",
+		"degi", "dega", "batao", "dikhao",
+	}
+	for _, tr := range convTriggers {
+		if strings.Contains(lowerText, tr) {
+			return true
+		}
+	}
+
+	// 4. Check reply to her message
 	if msg.ReplyToMessage != nil {
 		// A. Check by From user metadata if present
 		if msg.ReplyToMessage.From != nil {

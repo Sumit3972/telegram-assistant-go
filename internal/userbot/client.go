@@ -274,7 +274,20 @@ func (ub *UserbotManager) Start(ctx context.Context) error {
 				ub.peers = peersMgr
 				ub.senderMu.Unlock()
 
-				log.Printf("🎉 [Userbot MTProto] Connected and actively listening for messages sent to @%s (%s)!", ub.MyUsername, ub.MyName)
+				if self, err := client.Self(ctx); err == nil && self != nil {
+					ub.MyUserID = fmt.Sprintf("%d", self.ID)
+					if self.Username != "" {
+						ub.MyUsername = self.Username
+					}
+					if self.FirstName != "" {
+						ub.MyName = self.FirstName
+					}
+					ub.cfg.MyPersonalUserID = ub.MyUserID
+					ub.cfg.MyPersonalUsername = ub.MyUsername
+					log.Printf("🎉 [Userbot MTProto] Authenticated as real account: @%s (Name: %q, ID: %d)!", self.Username, self.FirstName, self.ID)
+				} else {
+					log.Printf("🎉 [Userbot MTProto] Connected and actively listening for messages sent to @%s (%s)!", ub.MyUsername, ub.MyName)
+				}
 				<-ctx.Done()
 
 				ub.senderMu.Lock()
