@@ -77,7 +77,7 @@ func main() {
 	// 5. Initialize AI Client
 	providers := []ai.ProviderConfig{
 		{
-			BaseURL: "https://agentrouter.org/v1",
+			BaseURL: "https://sumit3972.alwaysdata.net/v1",
 			APIKey:  "sk-TPUawcFJbkyiBuaBhE4Gu2TzBAVIfi7yfNBGuVbuNksqPxMt",
 			Models: []string{
 				"gpt-5.6-sol",
