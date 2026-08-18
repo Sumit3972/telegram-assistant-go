@@ -153,7 +153,24 @@ func (m *Moderator) HandleUpdate(ctx context.Context, update *domain.TelegramUpd
 		return
 	}
 
-	// 3. Handle Private Chat (DM)
+	// 3. Cache incoming message in history (for both private and group chats)
+	if text != "" && !strings.HasPrefix(text, "/") {
+		uName := msg.From.Username
+		if uName == "" {
+			uName = msg.From.FirstName
+		}
+		_ = m.historyRepo.AddMessage(
+			ctx,
+			chatIDStr,
+			userIDStr,
+			uName,
+			text,
+			strconv.Itoa(msg.MessageID),
+			"",
+		)
+	}
+
+	// 4. Handle Private Chat (DM)
 	if msg.Chat.Type == "private" {
 		if strings.HasPrefix(text, "/start") {
 			m.commandHandler.HandleCommand(ctx, msg, false)
@@ -164,14 +181,14 @@ func (m *Moderator) HandleUpdate(ctx context.Context, update *domain.TelegramUpd
 		return
 	}
 
-	// 4. Auto-discover group
+	// 5. Auto-discover group
 	title := msg.Chat.Title
 	if title == "" {
 		title = "Telegram Group"
 	}
 	_ = m.groupRepo.CreateOrUpdateGroup(ctx, chatIDStr, title)
 
-	// 5. Handle New Chat Members
+	// 6. Handle New Chat Members
 	if len(msg.NewChatMembers) > 0 {
 		for _, member := range msg.NewChatMembers {
 			if !member.IsBot {
@@ -179,19 +196,6 @@ func (m *Moderator) HandleUpdate(ctx context.Context, update *domain.TelegramUpd
 			}
 		}
 		return
-	}
-
-	// 6. Cache message in history
-	if text != "" && !strings.HasPrefix(text, "/") {
-		_ = m.historyRepo.AddMessage(
-			ctx,
-			chatIDStr,
-			userIDStr,
-			msg.From.Username,
-			text,
-			strconv.Itoa(msg.MessageID),
-			"",
-		)
 	}
 
 	// Check if user is admin

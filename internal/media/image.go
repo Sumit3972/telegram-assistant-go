@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -23,7 +24,7 @@ func NewImageService(apiURL, apiKey string, primaryModel ...string) *ImageServic
 	if apiURL == "" {
 		apiURL = "https://api.futureppo.top/v1/images/generations"
 	}
-	model := "gpt-image-2"
+	model := "grok-imagine-image-quality"
 	if len(primaryModel) > 0 && primaryModel[0] != "" {
 		model = primaryModel[0]
 	}
@@ -41,18 +42,45 @@ type GeneratedImage struct {
 	URL         string
 }
 
+func sanitizePromptForModel(model, rawPrompt string) string {
+	clean := strings.TrimSpace(rawPrompt)
+	
+	// If the prompt doesn't already contain quality tags and is reasonably short, add light quality cues
+	if len(clean) < 600 && !strings.Contains(strings.ToLower(clean), "8k") && !strings.Contains(strings.ToLower(clean), "photograph") {
+		clean += ", 8K UHD portrait, editorial photography, sharp focus, natural skin texture, soft cinematic lighting, zero watermark"
+	}
+
+	// Strictly limit prompt length for models with character limits (e.g. Qwen & Z-Image require <= 1024 chars)
+	maxLen := 1000
+	if len(clean) > maxLen {
+		// Cleanly truncate at last comma or period within maxLen
+		truncated := clean[:maxLen]
+		if lastIdx := strings.LastIndexAny(truncated, ",.;"); lastIdx > maxLen-150 {
+			clean = strings.TrimSpace(truncated[:lastIdx])
+		} else {
+			clean = strings.TrimSpace(truncated)
+		}
+	}
+
+	return clean
+}
+
 func (s *ImageService) GenerateImage(ctx context.Context, prompt string) (*GeneratedImage, error) {
 	primary := s.primaryModel
 	if primary == "" {
-		primary = "gpt-image-2"
+		primary = "grok-imagine-image-quality"
 	}
 
 	models := []string{primary}
 	fallbacks := []string{
-		"qwen-image-2512",
-		"z-image-turbo",
+		"grok-imagine-image-quality",
+		"grok-imagine-image-quality-lite",
 		"grok-imagine-image",
 		"grok-imagine-image-lite",
+		"grok-imagine-image-edit",
+		"gpt-image-2",
+		"qwen-image-2512",
+		"z-image-turbo",
 	}
 	for _, m := range fallbacks {
 		if m != primary {
@@ -60,15 +88,14 @@ func (s *ImageService) GenerateImage(ctx context.Context, prompt string) (*Gener
 		}
 	}
 
-	fullPrompt := prompt + ", 8K UHD, masterpiece, award-winning editorial portrait photography, crystal clear sharp focus, natural skin texture with realistic micro-pores, soft cinematic lighting, rich colors, zero watermark, no blur, no grain"
-
 	var lastErr error
 	for i, model := range models {
-		log.Printf("[ImageService] Generating image via %s (attempt %d/%d)...", model, i+1, len(models))
+		modelPrompt := sanitizePromptForModel(model, prompt)
+		log.Printf("[ImageService] Generating image via %s (attempt %d/%d, promptLen=%d)...", model, i+1, len(models), len(modelPrompt))
 
 		reqBody := map[string]any{
 			"model":           model,
-			"prompt":          fullPrompt,
+			"prompt":          modelPrompt,
 			"n":               1,
 			"size":            "1024x1024",
 			"response_format": "b64_json",

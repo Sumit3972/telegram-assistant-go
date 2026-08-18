@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
@@ -99,7 +100,8 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 
 	// 3. Get recent history
 	var histContext strings.Builder
-	if recent, err := h.historyRepo.GetRecentMessages(ctx, chatIDStr, 15); err == nil && len(recent) > 0 {
+	recent, _ := h.historyRepo.GetRecentMessages(ctx, chatIDStr, 20)
+	if len(recent) > 0 {
 		for _, m := range recent {
 			histContext.WriteString(fmt.Sprintf("%s: %s\n", m.Username, m.MessageText))
 		}
@@ -136,17 +138,55 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 			Role:    "system",
 			Content: sysPrompt,
 		},
-		{
+	}
+
+	// Add multi-turn message history for rich conversational context
+	isPrivateChat := msg.Chat.Type == "private"
+	currentMsgIDStr := strconv.Itoa(msg.MessageID)
+	hasCurrentInHistory := false
+
+	for _, m := range recent {
+		if m.MessageID != "" && m.MessageID == currentMsgIDStr {
+			hasCurrentInHistory = true
+		}
+		isAssistant := m.UserID == "assistant" ||
+			strings.EqualFold(m.Username, h.botUsername) ||
+			strings.EqualFold(m.Username, h.botName)
+
+		if isAssistant {
+			messages = append(messages, domain.ChatMessage{
+				Role:    "assistant",
+				Content: m.MessageText,
+			})
+		} else {
+			content := m.MessageText
+			if !isPrivateChat && m.Username != "" {
+				content = fmt.Sprintf("%s: %s", m.Username, m.MessageText)
+			}
+			messages = append(messages, domain.ChatMessage{
+				Role:    "user",
+				Content: content,
+			})
+		}
+	}
+
+	// If current message was not in recent history, append it as the latest user turn
+	if !hasCurrentInHistory {
+		content := text
+		if !isPrivateChat && username != "" {
+			content = fmt.Sprintf("%s: %s", username, text)
+		}
+		messages = append(messages, domain.ChatMessage{
 			Role:    "user",
-			Content: text,
-		},
+			Content: content,
+		})
 	}
 
 	opts := ai.ChatCompletionOptions{
 		Tools: tools,
 	}
 
-	log.Printf("[Conversation] Calling AI for user @%s in chat %s...", username, chatIDStr)
+	log.Printf("[Conversation] Calling AI for user @%s in chat %s (turns=%d)...", username, chatIDStr, len(messages))
 	res, err := h.aiClient.ChatCompletions(ctx, messages, opts)
 	if err != nil || res == nil {
 		log.Printf("[Conversation] AI ChatCompletions error: %v", err)
@@ -314,6 +354,9 @@ func (h *ConversationHandler) parseAndDispatchResponse(
 }
 
 func (h *ConversationHandler) sendMessage(ctx context.Context, msg *domain.TelegramMessage, text string) {
+	chatIDStr := fmt.Sprintf("%d", msg.Chat.ID)
+	_ = h.historyRepo.AddMessage(ctx, chatIDStr, "assistant", h.botUsername, text, "", strconv.Itoa(msg.MessageID))
+
 	if msg.IsUserbot && h.userbotSender != nil && h.userbotSender.IsAvailable() {
 		log.Printf("[Conversation] Sending reply from Userbot MTProto account to chat %d...", msg.Chat.ID)
 		err := h.userbotSender.SendMessage(ctx, msg.Chat.ID, text, msg.MessageID)
@@ -329,6 +372,13 @@ func (h *ConversationHandler) sendMessage(ctx context.Context, msg *domain.Teleg
 }
 
 func (h *ConversationHandler) sendPhoto(ctx context.Context, msg *domain.TelegramMessage, photoData []byte, photoURL, caption string) {
+	chatIDStr := fmt.Sprintf("%d", msg.Chat.ID)
+	photoRecordText := caption
+	if photoRecordText == "" {
+		photoRecordText = "[Sent photo]"
+	}
+	_ = h.historyRepo.AddMessage(ctx, chatIDStr, "assistant", h.botUsername, photoRecordText, "", strconv.Itoa(msg.MessageID))
+
 	if msg.IsUserbot && h.userbotSender != nil && h.userbotSender.IsAvailable() {
 		log.Printf("[Conversation] Sending photo from Userbot MTProto account to chat %d...", msg.Chat.ID)
 		err := h.userbotSender.SendPhoto(ctx, msg.Chat.ID, photoData, photoURL, caption, msg.MessageID)
@@ -346,6 +396,9 @@ func (h *ConversationHandler) sendPhoto(ctx context.Context, msg *domain.Telegra
 }
 
 func (h *ConversationHandler) sendVoice(ctx context.Context, msg *domain.TelegramMessage, voiceData []byte) {
+	chatIDStr := fmt.Sprintf("%d", msg.Chat.ID)
+	_ = h.historyRepo.AddMessage(ctx, chatIDStr, "assistant", h.botUsername, "[Sent voice message]", "", strconv.Itoa(msg.MessageID))
+
 	if msg.IsUserbot && h.userbotSender != nil && h.userbotSender.IsAvailable() {
 		log.Printf("[Conversation] Sending voice from Userbot MTProto account to chat %d...", msg.Chat.ID)
 		err := h.userbotSender.SendVoice(ctx, msg.Chat.ID, voiceData, msg.MessageID)

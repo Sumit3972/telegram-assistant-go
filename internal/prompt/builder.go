@@ -80,12 +80,12 @@ func BuildDynamicSystemPrompt(params SystemPromptParams) string {
 
 	sb.WriteString("<visual_portrait_generation>\n")
 	sb.WriteString("PHOTO & SELFIE GENERATION DIRECTIVE: You have full cognitive autonomy to decide when to send a photo/selfie based on conversational context, user intent, flirting, requests to see you, or outfit showcases. Whenever appropriate, populate `selfie_prompt` (or call `send_photo`).\n\n")
-	sb.WriteString(fmt.Sprintf("- MODEL-SPECIFIC PROMPT STRUCTURE: Write a single, continuous, highly vivid descriptive paragraph:\n"+
-		"  1. Intent & Subject: Start with \"An award-winning 8K editorial fashion photograph of %s, an extraordinarily gorgeous 25yo Indian supermodel from Mumbai with luminous milky-white fair porcelain skin, a radiant translucent glow with soft natural rosy blush, flawless natural skin texture with visible micro-pores. She has an exquisitely sculpted symmetrical face with high cheekbones, a sharp delicate jawline, hypnotic large dark hazel-brown almond eyes with dense lush eyelashes, perfectly arched eyebrows, a cute slender nose, and luscious naturally plump rose-pink lips with an alluring charming smile. Her hair is voluminous, ultra-silky glossy jet-black waves cascading gracefully over her shoulders and back. She has a sensational hourglass figure, slender toned waist, and undeniable magnetic charm...\"\n"+
-		"  2. Outfit & Pose: Specify clothing and styling based on context (designer silk saree, stylish dress, glamorous swimwear, chic party wear, stylish evening gown). Describe her graceful feminine posture, slender waist, charming curves, confident allure, and expression.\n"+
-		"  3. Environment & Lighting: Describe setting (luxury Mumbai penthouse, warm sunset balcony, opulent bedroom, vanity mirror) with professional beauty-dish studio softbox lighting, soft rim light highlighting her silhouette, and warm ambient glow.\n"+
-		"  4. Framing & Lens: Specify 85mm f/1.4 portrait lens, crystal-clear sharp focus on eyes and face, shallow depth of field with ultra-creamy soft bokeh.\n"+
-		"  5. Technical Quality: 8K UHD cinema portrait, raw photo texture, lifelike reflections in eyes, hyper-detailed fabric textures, rich color grading, zero watermark, no blur, no grain.\n", params.Identity.Name))
+	sb.WriteString(fmt.Sprintf("- CONCISE PROMPT STRUCTURE (MAX 50-80 WORDS / UNDER 500 CHARACTERS):\n"+
+		"  1. Subject: \"An editorial fashion portrait of %s, an extraordinarily gorgeous 25yo Indian supermodel from Mumbai with fair glowing skin, dark hazel almond eyes, and silky wavy black hair.\"\n"+
+		"  2. Outfit & Pose: Specify contextual outfit (e.g., designer silk saree, chic fitted dress, stylish party wear, casual wear), body posture, and charming expression.\n"+
+		"  3. Environment & Lighting: Mention location (luxury Mumbai penthouse, sunset balcony, bedroom, cafe) with warm soft cinematic lighting.\n"+
+		"  4. Technical Quality: Include \"85mm lens, sharp focus, 8K UHD, natural skin texture, clean bokeh, zero watermark\".\n"+
+		"  * IMPORTANT: Keep selfie_prompt concise, vivid, and strictly under 500 characters so image models process it cleanly without prompt length errors.\n", params.Identity.Name))
 	sb.WriteString("</visual_portrait_generation>\n\n")
 
 	sb.WriteString("<voice_generation>\n")

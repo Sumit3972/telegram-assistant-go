@@ -28,7 +28,7 @@ func TestBuildDynamicSystemPrompt(t *testing.T) {
 	if !strings.Contains(p, "Janvi") {
 		t.Errorf("Expected prompt to contain bot name 'Janvi'")
 	}
-	if !strings.Contains(p, "photo bhej") && !strings.Contains(p, "selfie_generation") {
+	if !strings.Contains(p, "photo bhej") && !strings.Contains(p, "selfie_generation") && !strings.Contains(p, "selfie_prompt") {
 		t.Errorf("Expected prompt to include selfie generation directives")
 	}
 	if !strings.Contains(p, "mute_user") {
