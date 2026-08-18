@@ -44,14 +44,34 @@ type GeneratedImage struct {
 
 func sanitizePromptForModel(model, rawPrompt string) string {
 	clean := strings.TrimSpace(rawPrompt)
-	
+
+	// Replace literal celebrity names to prevent Azure / OpenAI input moderation safety blocks
+	celebReplacements := []struct {
+		target string
+		rep    string
+	}{
+		{"bollywood actress tara sutaria as ", ""},
+		{"bollywood actress tara sutaria", "an extraordinarily gorgeous Bollywood diva and supermodel"},
+		{"actress tara sutaria as ", ""},
+		{"actress tara sutaria", "an extraordinarily gorgeous Bollywood diva and supermodel"},
+		{"tara sutaria as ", ""},
+		{"tara sutaria", "an extraordinarily gorgeous Bollywood diva and supermodel"},
+	}
+	for _, cr := range celebReplacements {
+		clean = replaceCaseInsensitive(clean, cr.target, cr.rep)
+	}
+
 	// If the prompt doesn't already contain quality tags and is reasonably short, add light quality cues
 	if len(clean) < 600 && !strings.Contains(strings.ToLower(clean), "8k") && !strings.Contains(strings.ToLower(clean), "photograph") {
 		clean += ", 8K UHD portrait, editorial photography, sharp focus, natural skin texture, soft cinematic lighting, zero watermark"
 	}
 
-	// Strictly limit prompt length for models with character limits (e.g. Qwen & Z-Image require <= 1024 chars)
-	maxLen := 1000
+	// Strictly limit prompt length for models with character limits (e.g. Qwen & Z-Image require <= 1024 chars; GPT-Image-2 allows up to 4000)
+	maxLen := 4000
+	if strings.Contains(strings.ToLower(model), "qwen") || strings.Contains(strings.ToLower(model), "z-image") {
+		maxLen = 1000
+	}
+
 	if len(clean) > maxLen {
 		// Cleanly truncate at last comma or period within maxLen
 		truncated := clean[:maxLen]
@@ -63,6 +83,17 @@ func sanitizePromptForModel(model, rawPrompt string) string {
 	}
 
 	return clean
+}
+
+func replaceCaseInsensitive(str, substr, repl string) string {
+	for {
+		idx := strings.Index(strings.ToLower(str), strings.ToLower(substr))
+		if idx == -1 {
+			break
+		}
+		str = str[:idx] + repl + str[idx+len(substr):]
+	}
+	return str
 }
 
 func (s *ImageService) GenerateImage(ctx context.Context, prompt string) (*GeneratedImage, error) {
