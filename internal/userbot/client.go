@@ -463,8 +463,13 @@ func (ub *UserbotManager) SendMessage(ctx context.Context, chatID int64, text st
 		_, sendErr = snd.To(peer).Text(ctx, text)
 	}
 
+	// If replying failed with MSG_ID_INVALID, retry direct text without reply
+	if sendErr != nil && strings.Contains(sendErr.Error(), "MSG_ID_INVALID") {
+		_, sendErr = snd.To(peer).Text(ctx, text)
+	}
+
 	// If sendErr is PEER_ID_INVALID and replyToID > 0, retry with InputPeerUserFromMessage
-	if sendErr != nil && replyToID > 0 {
+	if sendErr != nil && strings.Contains(sendErr.Error(), "PEER_ID_INVALID") && replyToID > 0 {
 		fallbackPeer := &tg.InputPeerUserFromMessage{
 			Peer:   &tg.InputPeerSelf{},
 			MsgID:  replyToID,
@@ -476,6 +481,11 @@ func (ub *UserbotManager) SendMessage(ctx context.Context, chatID int64, text st
 			ub.peerCache[chatID] = fallbackPeer
 			ub.peerMu.Unlock()
 		}
+	}
+
+	// Final fallback: try direct text without reply
+	if sendErr != nil && replyToID > 0 {
+		_, sendErr = snd.To(peer).Text(ctx, text)
 	}
 
 	if sendErr != nil {

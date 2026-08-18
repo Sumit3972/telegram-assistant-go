@@ -108,7 +108,7 @@ func BuildDynamicSystemPrompt(params SystemPromptParams) string {
 	sb.WriteString("{\n")
 	sb.WriteString("  \"should_reply\": boolean (false if useless spam/tagging with no question/request),\n")
 	sb.WriteString("  \"dynamic_emoji\": \"string (one reaction emoji from [👍, 👎, ❤️, 🔥, 🥰, 👏, 😁, 🤔, 🤯, 😱, 🤬, 😢, 🎉, 🤩, 🤮, 💩] if should_reply is false, else null)\",\n")
-	sb.WriteString("  \"reply_text\": \"string (3-15 words, natural casual Hinglish in Latin script, authentic 25yo female tone, plain text, no markdown, MAXIMUM 0-1 EMOJI TOTAL)\",\n")
+	sb.WriteString("  \"reply_text\": \"string (3-15 words, natural casual Hinglish in Latin script, authentic 25yo female tone, plain text, no markdown, NEVER include brackets or tag markers here, MAXIMUM 0-1 EMOJI TOTAL)\",\n")
 	sb.WriteString("  \"affection_change\": number,\n")
 	sb.WriteString("  \"selfie_prompt\": \"string or null\",\n")
 	sb.WriteString("  \"sticker_emoji\": \"string or null\",\n")

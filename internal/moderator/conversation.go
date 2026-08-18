@@ -352,10 +352,37 @@ func (h *ConversationHandler) parseAndDispatchResponse(
 		}
 	}
 
+	// Sanitize reply text
+	resp.ReplyText = sanitizeReplyText(resp.ReplyText)
+
 	// Send normal text reply
 	if resp.ReplyText != "" {
 		h.sendMessage(ctx, msg, resp.ReplyText)
 	}
+}
+
+func sanitizeReplyText(text string) string {
+	t := strings.TrimSpace(text)
+	if t == "" {
+		return ""
+	}
+	// Check for repeating bracket loops or runaway hallucinated tags (e.g. [2023][2023]...)
+	if strings.Count(t, "[") > 2 {
+		var cleanLines []string
+		for _, line := range strings.Split(t, "\n") {
+			l := strings.TrimSpace(line)
+			if strings.Count(l, "[") > 2 || strings.Contains(l, "[202") {
+				continue
+			}
+			cleanLines = append(cleanLines, l)
+		}
+		t = strings.TrimSpace(strings.Join(cleanLines, "\n"))
+	}
+	// Telegram limit safe guard
+	if len(t) > 2000 {
+		t = strings.TrimSpace(t[:2000])
+	}
+	return t
 }
 
 func (h *ConversationHandler) sendMessage(ctx context.Context, msg *domain.TelegramMessage, text string) {
