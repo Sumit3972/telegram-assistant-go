@@ -228,6 +228,15 @@ func (ub *UserbotManager) Start(ctx context.Context) error {
 				replySenderID := int64(0)
 				replyUsername := ""
 				replyFirstName := ""
+				replyText := ""
+
+				selfID := int64(8542441463)
+				if ub.MyUserID != "" {
+					if id, err := strconv.ParseInt(ub.MyUserID, 10, 64); err == nil && id > 0 {
+						selfID = id
+					}
+				}
+
 				if header.ReplyToPeerID != nil {
 					if peerUser, ok := header.ReplyToPeerID.(*tg.PeerUser); ok {
 						replySenderID = peerUser.UserID
@@ -237,6 +246,91 @@ func (ub *UserbotManager) Start(ctx context.Context) error {
 						}
 					}
 				}
+
+				// If reply sender not determined yet, fetch the replied message directly from MTProto
+				if replySenderID == 0 && ub.rawAPI != nil {
+					if peerChannel, ok := msg.PeerID.(*tg.PeerChannel); ok {
+						if inputPeer, err := ub.getInputPeer(ctx, peerChannel.ChannelID); err == nil {
+							if inCh, ok := inputPeer.(*tg.InputPeerChannel); ok {
+								res, err := ub.rawAPI.ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
+									Channel: &tg.InputChannel{ChannelID: inCh.ChannelID, AccessHash: inCh.AccessHash},
+									ID:      []tg.InputMessageClass{&tg.InputMessageID{ID: header.ReplyToMsgID}},
+								})
+								if err == nil {
+									switch v := res.(type) {
+									case *tg.MessagesChannelMessages:
+										for _, m := range v.Messages {
+											if fullM, ok := m.(*tg.Message); ok {
+												replyText = fullM.Message
+												if fullM.Out {
+													replySenderID = selfID
+													replyUsername = ub.MyUsername
+													replyFirstName = ub.MyName
+												} else if pUser, ok := fullM.FromID.(*tg.PeerUser); ok {
+													replySenderID = pUser.UserID
+													for _, u := range v.Users {
+														if user, ok := u.(*tg.User); ok && user.ID == replySenderID {
+															replyUsername = user.Username
+															replyFirstName = user.FirstName
+															break
+														}
+													}
+												}
+											}
+										}
+									}
+								}
+							}
+						}
+					} else {
+						res, err := ub.rawAPI.MessagesGetMessages(ctx, []tg.InputMessageClass{&tg.InputMessageID{ID: header.ReplyToMsgID}})
+						if err == nil {
+							switch v := res.(type) {
+							case *tg.MessagesMessages:
+								for _, m := range v.Messages {
+									if fullM, ok := m.(*tg.Message); ok {
+										replyText = fullM.Message
+										if fullM.Out {
+											replySenderID = selfID
+											replyUsername = ub.MyUsername
+											replyFirstName = ub.MyName
+										} else if pUser, ok := fullM.FromID.(*tg.PeerUser); ok {
+											replySenderID = pUser.UserID
+											for _, u := range v.Users {
+												if user, ok := u.(*tg.User); ok && user.ID == replySenderID {
+													replyUsername = user.Username
+													replyFirstName = user.FirstName
+													break
+												}
+											}
+										}
+									}
+								}
+							case *tg.MessagesMessagesSlice:
+								for _, m := range v.Messages {
+									if fullM, ok := m.(*tg.Message); ok {
+										replyText = fullM.Message
+										if fullM.Out {
+											replySenderID = selfID
+											replyUsername = ub.MyUsername
+											replyFirstName = ub.MyName
+										} else if pUser, ok := fullM.FromID.(*tg.PeerUser); ok {
+											replySenderID = pUser.UserID
+											for _, u := range v.Users {
+												if user, ok := u.(*tg.User); ok && user.ID == replySenderID {
+													replyUsername = user.Username
+													replyFirstName = user.FirstName
+													break
+												}
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+
 				replyToMsg = &domain.TelegramMessage{
 					MessageID: header.ReplyToMsgID,
 					From: &domain.TelegramUser{
@@ -244,6 +338,7 @@ func (ub *UserbotManager) Start(ctx context.Context) error {
 						Username:  replyUsername,
 						FirstName: replyFirstName,
 					},
+					Text: replyText,
 				}
 			}
 		}
