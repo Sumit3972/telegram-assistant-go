@@ -243,6 +243,9 @@ func (c *Client) request(
 
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	httpReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
+	httpReq.Header.Set("Accept", "application/json, text/plain, */*")
+	httpReq.Header.Set("Accept-Language", "en-US,en;q=0.9")
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
