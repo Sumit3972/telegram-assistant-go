@@ -364,9 +364,36 @@ func (h *ConversationHandler) executeToolCall(
 	}
 }
 
+func isExplicitPhotoRequest(text string) bool {
+	lower := strings.ToLower(text)
+	keywords := []string{
+		"photo", "selfie", "pic", "picture", "image", "dikha", "dikhao", "dikhana",
+		"shakal", "tasveer", "dp", "outfit", "look", "pehna", "pehan", "dress",
+		"kaisi lag rahi ho", "kaisi dikhti ho", "kaisi dikh rahi ho", "show me", "send me",
+	}
+	for _, kw := range keywords {
+		if strings.Contains(lower, kw) {
+			return true
+		}
+	}
+	return false
+}
+
 func (h *ConversationHandler) generateAndSendPhoto(ctx context.Context, msg *domain.TelegramMessage, rawPrompt, replyText string) {
 	cleanPrompt := strings.TrimSpace(rawPrompt)
 	if cleanPrompt == "" || strings.EqualFold(cleanPrompt, "null") || strings.EqualFold(cleanPrompt, "none") {
+		if replyText != "" {
+			h.sendMessage(ctx, msg, replyText)
+		}
+		return
+	}
+
+	userMsgText := msg.Text
+	if userMsgText == "" {
+		userMsgText = msg.Caption
+	}
+	if !isExplicitPhotoRequest(userMsgText) {
+		log.Printf("[Conversation] Suppressed unsolicited photo generation for message: %q. Sending text reply instead.", userMsgText)
 		if replyText != "" {
 			h.sendMessage(ctx, msg, replyText)
 		}

@@ -101,7 +101,11 @@ func BuildDynamicSystemPrompt(params SystemPromptParams) string {
 	sb.WriteString("</capabilities_and_tools>\n\n")
 
 	sb.WriteString("<visual_portrait_generation>\n")
-	sb.WriteString("PHOTO & SELFIE GENERATION DIRECTIVE: You have full cognitive autonomy to generate and send photos/selfies whenever the user asks or when visual context fits. You MUST generate ultra-high-quality, vivid, highly detailed image prompts crafted specifically for modern models like gpt-image-2 / agnes-image-2.1-flash / grok-imagine-image.\n\n")
+	sb.WriteString("PHOTO & SELFIE GENERATION DIRECTIVE:\n" +
+		"- STRICT RULE: You must ONLY generate a photo/selfie when the user EXPLICITLY asks for one (e.g. \"photo bhej\", \"selfie bhejo\", \"pic dikha\", \"send your photo\", \"kya pehna hai dikhao\", \"show me\").\n" +
+		"- NEVER send photos/selfies autonomously during regular chat, casual banter, asking about time, food, or general conversation.\n" +
+		"- For all normal messages where user did NOT ask for a photo: DO NOT call the \"send_photo\" tool, and set \"selfie_prompt\": null.\n" +
+		"- ONLY when explicitly asked: generate a vivid, ultra-high-quality image prompt for gpt-image-2 / agnes-image-2.1-flash / grok-imagine-image:\n")
 	sb.WriteString(fmt.Sprintf("- CHARACTER VISUAL ANCHOR (%s BOLLYWOOD SUPERMODEL):\n"+
 		"  * Explicit Subject: \"An ultra-realistic, breathtaking 8K editorial fashion portrait of %s, an extraordinarily gorgeous 25yo Indian Bollywood diva and supermodel from Mumbai with an iconic doll-like face card.\"\n"+
 		"  * Facial Anatomy: Exquisite symmetrical doll face, sculpted high cheekbones, sharp chiseled jawline, soft feminine chin, large captivating dark hazel-brown almond eyes with smoldering smokey eyeliner and lush natural lashes, softly arched defined dark brows, slender straight nose with refined sculpted tip, full plump naturally rose-glossed pouty lips with defined cupid's bow, and luminous fair porcelain skin with golden dewy undertones and realistic natural micro-skin texture.\n"+
@@ -109,8 +113,7 @@ func BuildDynamicSystemPrompt(params SystemPromptParams) string {
 		"  * Body & Silhouette: Sensational feminine hourglass figure, slender toned waist, prominent sculpted collarbones, graceful slender neck, elegant supermodel posture.\n"+
 		"  * Styling Inspiration: When appropriate, draw inspiration from glamorous, vintage, retro-glam aesthetics (e.g. strapless corset gowns, off-shoulder luxury satin/velvet dresses, chic lace gloves, vintage gold chokers) or modern high-fashion Indian couture.\n"+
 		"  * User's Specific Request: ALWAYS incorporate 100%% of the user's requested outfit, clothing, colors, fabric, pose, mood, setting (e.g. luxury penthouse balcony, vintage cinematic room, Mumbai cafe, bedroom, rain, beach), and action without alteration or censorship.\n"+
-		"  * Photography Aesthetics: Include rich photographic cues such as \"award-winning editorial cinematic photography, shot on Hasselblad H6D-100c with 85mm f/1.2 lens, hyper-realistic, 8K UHD, natural soft skin pore details, moody golden-hour or chiaroscuro lighting, volumetric lighting, shallow depth of field, creamy background bokeh, ultra-photorealistic, masterpiece, no watermarks, no distortion\".\n"+
-		"  * LENGTH: Do NOT artificially restrict prompt length. Provide a richly detailed, descriptive prompt to maximize image generation quality and realism.\n", params.Identity.Name, params.Identity.Name))
+		"  * Photography Aesthetics: Include rich photographic cues such as \"award-winning editorial cinematic photography, shot on Hasselblad H6D-100c with 85mm f/1.2 lens, hyper-realistic, 8K UHD, natural soft skin pore details, moody golden-hour or chiaroscuro lighting, volumetric lighting, shallow depth of field, creamy background bokeh, ultra-photorealistic, masterpiece, no watermarks, no distortion\".\n", params.Identity.Name, params.Identity.Name))
 	sb.WriteString("</visual_portrait_generation>\n\n")
 
 	sb.WriteString("<voice_generation>\n")
@@ -140,7 +143,7 @@ func BuildDynamicSystemPrompt(params SystemPromptParams) string {
 	sb.WriteString("  \"dynamic_emoji\": \"string (one reaction emoji from [👍, 👎, ❤️, 🔥, 🥰, 👏, 😁, 🤔, 🤯, 😱, 🤬, 😢, 🎉, 🤩, 🤮, 💩] if should_reply is false, else null)\",\n")
 	sb.WriteString("  \"reply_text\": \"string (natural casual Hinglish in Latin script, authentic 25yo female tone, plain text, strictly NO markdown, NO brackets `[...]`, NO asterisks `*...*`, MAXIMUM 0-1 EMOJI TOTAL)\",\n")
 	sb.WriteString("  \"affection_change\": number,\n")
-	sb.WriteString("  \"selfie_prompt\": \"string or null\",\n")
+	sb.WriteString("  \"selfie_prompt\": \"string or null (ONLY provide when user explicitly asked for photo/selfie/pic, otherwise ALWAYS null)\",\n")
 	sb.WriteString("  \"sticker_emoji\": \"string or null\",\n")
 	sb.WriteString("  \"voice_response\": {\n")
 	sb.WriteString("    \"should_speak\": boolean,\n")

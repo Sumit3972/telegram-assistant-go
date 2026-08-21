@@ -28,7 +28,7 @@ func GetConversationTools() []domain.ToolDefinition {
 			Type: "function",
 			Function: domain.ToolFunctionDefinition{
 				Name:        "send_photo",
-				Description: "Generates and sends a photo or selfie of Chavi to the chat. Call this whenever the user asks to see you, requests a photo/selfie/look/outfit, or when sharing a photo naturally fits the conversational context.",
+				Description: "Generates and sends a photo or selfie of Chavi to the chat. Call this ONLY when the user EXPLICITLY asks to see you, requests a photo/selfie/look/outfit, or says something like 'dikhao', 'selfie bhejo', 'photo bhej'. Do NOT call this for casual conversation.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
