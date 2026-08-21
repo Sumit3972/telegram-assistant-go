@@ -24,7 +24,7 @@ func NewImageService(apiURL, apiKey string, primaryModel ...string) *ImageServic
 	if apiURL == "" {
 		apiURL = "https://api.futureppo.top/v1/images/generations"
 	}
-	model := "gpt-image-2"
+	model := "grok-imagine-image-lite"
 	if len(primaryModel) > 0 && primaryModel[0] != "" {
 		model = primaryModel[0]
 	}
@@ -45,7 +45,7 @@ type GeneratedImage struct {
 func sanitizePromptForModel(model, rawPrompt string) string {
 	clean := strings.TrimSpace(rawPrompt)
 
-	// Replace literal celebrity names to prevent Azure / OpenAI input moderation safety blocks
+	// Replace literal celebrity names to prevent Azure / OpenAI / Grok input moderation safety blocks
 	celebReplacements := []struct {
 		target string
 		rep    string
@@ -61,12 +61,20 @@ func sanitizePromptForModel(model, rawPrompt string) string {
 		clean = replaceCaseInsensitive(clean, cr.target, cr.rep)
 	}
 
-	// If the prompt doesn't already contain quality tags and is reasonably short, add light quality cues
-	if len(clean) < 600 && !strings.Contains(strings.ToLower(clean), "8k") && !strings.Contains(strings.ToLower(clean), "photograph") {
-		clean += ", 8K UHD portrait, editorial photography, sharp focus, natural skin texture, soft cinematic lighting, zero watermark"
+	// Remove negative prompt artifacts that harm Grok/Flux image models
+	negatives := []string{
+		", zero watermark", ", no watermark", ", no distortion", ", no blur", "no watermark", "zero watermark",
+	}
+	for _, neg := range negatives {
+		clean = replaceCaseInsensitive(clean, neg, "")
 	}
 
-	// Strictly limit prompt length for models with character limits (e.g. Z-Image requires <= 1024 chars; GPT-Image-2 allows up to 4000)
+	// If the prompt doesn't already contain quality tags and is short, add affirmative photographic cues
+	if len(clean) < 300 && !strings.Contains(strings.ToLower(clean), "photograph") && !strings.Contains(strings.ToLower(clean), "lens") {
+		clean += ", authentic editorial portrait photography, shot on 85mm f/1.4 lens, natural skin texture, soft ambient lighting"
+	}
+
+	// Strictly limit prompt length for models with character limits
 	maxLen := 4000
 	if strings.Contains(strings.ToLower(model), "z-image") {
 		maxLen = 1000
@@ -82,7 +90,7 @@ func sanitizePromptForModel(model, rawPrompt string) string {
 		}
 	}
 
-	return clean
+	return strings.TrimSpace(clean)
 }
 
 func replaceCaseInsensitive(str, substr, repl string) string {
@@ -99,16 +107,16 @@ func replaceCaseInsensitive(str, substr, repl string) string {
 func (s *ImageService) GenerateImage(ctx context.Context, prompt string) (*GeneratedImage, error) {
 	primary := s.primaryModel
 	if primary == "" {
-		primary = "gpt-image-2"
+		primary = "grok-imagine-image-lite"
 	}
 
 	models := []string{primary}
 	fallbacks := []string{
-		"gpt-image-2",
 		"grok-imagine-image-lite",
-		"agnes-image-2.1-flash",
 		"grok-imagine-image",
+		"agnes-image-2.1-flash",
 		"agnes-image-2.0-flash",
+		"gpt-image-2",
 		"grok-imagine-image-edit",
 	}
 	for _, m := range fallbacks {

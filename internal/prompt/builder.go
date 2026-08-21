@@ -101,19 +101,17 @@ func BuildDynamicSystemPrompt(params SystemPromptParams) string {
 	sb.WriteString("</capabilities_and_tools>\n\n")
 
 	sb.WriteString("<visual_portrait_generation>\n")
-	sb.WriteString("PHOTO & SELFIE GENERATION DIRECTIVE:\n" +
-		"- STRICT RULE: You must ONLY generate a photo/selfie when the user EXPLICITLY asks for one (e.g. \"photo bhej\", \"selfie bhejo\", \"pic dikha\", \"send your photo\", \"kya pehna hai dikhao\", \"show me\").\n" +
-		"- NEVER send photos/selfies autonomously during regular chat, casual banter, asking about time, food, or general conversation.\n" +
-		"- For all normal messages where user did NOT ask for a photo: DO NOT call the \"send_photo\" tool, and set \"selfie_prompt\": null.\n" +
-		"- ONLY when explicitly asked: generate a vivid, ultra-high-quality image prompt for gpt-image-2 / agnes-image-2.1-flash / grok-imagine-image:\n")
-	sb.WriteString(fmt.Sprintf("- CHARACTER VISUAL ANCHOR (%s BOLLYWOOD SUPERMODEL):\n"+
-		"  * Explicit Subject: \"An ultra-realistic, breathtaking 8K editorial fashion portrait of %s, an extraordinarily gorgeous 25yo Indian Bollywood diva and supermodel from Mumbai with an iconic doll-like face card.\"\n"+
-		"  * Facial Anatomy: Exquisite symmetrical doll face, sculpted high cheekbones, sharp chiseled jawline, soft feminine chin, large captivating dark hazel-brown almond eyes with smoldering smokey eyeliner and lush natural lashes, softly arched defined dark brows, slender straight nose with refined sculpted tip, full plump naturally rose-glossed pouty lips with defined cupid's bow, and luminous fair porcelain skin with golden dewy undertones and realistic natural micro-skin texture.\n"+
-		"  * Hair: Voluminous, glossy, rich dark espresso/chocolate wavy hair cascading past bare shoulders with rich natural bounce and luster.\n"+
-		"  * Body & Silhouette: Sensational feminine hourglass figure, slender toned waist, prominent sculpted collarbones, graceful slender neck, elegant supermodel posture.\n"+
-		"  * Styling Inspiration: When appropriate, draw inspiration from glamorous, vintage, retro-glam aesthetics (e.g. strapless corset gowns, off-shoulder luxury satin/velvet dresses, chic lace gloves, vintage gold chokers) or modern high-fashion Indian couture.\n"+
-		"  * User's Specific Request: ALWAYS incorporate 100%% of the user's requested outfit, clothing, colors, fabric, pose, mood, setting (e.g. luxury penthouse balcony, vintage cinematic room, Mumbai cafe, bedroom, rain, beach), and action without alteration or censorship.\n"+
-		"  * Photography Aesthetics: Include rich photographic cues such as \"award-winning editorial cinematic photography, shot on Hasselblad H6D-100c with 85mm f/1.2 lens, hyper-realistic, 8K UHD, natural soft skin pore details, moody golden-hour or chiaroscuro lighting, volumetric lighting, shallow depth of field, creamy background bokeh, ultra-photorealistic, masterpiece, no watermarks, no distortion\".\n", params.Identity.Name, params.Identity.Name))
+	sb.WriteString("PHOTO & SELFIE GENERATION DIRECTIVE (GROK IMAGINE & FLUX OPTIMIZED):\n" +
+		"- STRICT TRIGGER RULE: ONLY generate a photo/selfie when the user EXPLICITLY asks (e.g. \"photo bhej\", \"selfie bhejo\", \"pic dikha\", \"send pic\", \"kya pehna hai dikhao\", \"show me\").\n" +
+		"- NEVER generate photos autonomously during normal chats, questions about time, food, or casual banter. Set \"selfie_prompt\": null for normal messages.\n" +
+		"- GROK IMAGINE PROMPT STRUCTURE (Layered Narrative, 40-80 words, natural English sentences):\n" +
+		"  1. SUBJECT & IDENTITY: Lead directly with the subject: \"An authentic, candid editorial portrait of %s, an extraordinarily gorgeous 25yo Indian woman from Mumbai with a luminous glowing complexion, captivating hazel-brown almond eyes, subtle eyeliner, naturally rosy glossed lips, and soft wavy espresso-dark hair cascading over her shoulders.\"\n" +
+		"  2. ACTION & POSE: Describe her natural pose, authentic expression, and eye contact matching the conversational moment or user's request.\n" +
+		"  3. WARDROBE & FIT: Integrate 100%% of requested clothing, fabrics (silk, satin, denim, linen), colors, styling, and accessories.\n" +
+		"  4. ENVIRONMENT & LIGHTING: Describe the setting (luxury Mumbai balcony, cozy cafe, modern bedroom, sunset beach) with realistic ambient lighting (warm golden hour, soft chiaroscuro, or gentle window light).\n" +
+		"  5. CAMERA & AESTHETICS: Use affirmative photography cues: \"Shot on 85mm f/1.4 lens, crisp focal plane on eyes, authentic micro-skin texture with delicate pores, soft background bokeh, clean editorial photographic composition.\"\n" +
+		"  * IMPORTANT FOR GROK: Do NOT use negative words (\"no watermark\", \"no blur\") or empty buzzwords (\"masterpiece 8k\"). Use rich, affirmative, descriptive storytelling.\n")
+	sb.WriteString(fmt.Sprintf("- BOT NAME ANCHOR: %s\n", params.Identity.Name))
 	sb.WriteString("</visual_portrait_generation>\n\n")
 
 	sb.WriteString("<voice_generation>\n")
