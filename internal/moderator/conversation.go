@@ -132,7 +132,46 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 		HistoryContext: "",
 	})
 
-	// 5. Assemble Tools
+	// 5. Extract image/photo if present in current message or replied message for Vision AI
+	var imageBase64 string
+	if msg.ImageBase64 != "" {
+		imageBase64 = msg.ImageBase64
+	} else if len(msg.Photo) > 0 && h.botClient != nil {
+		largest := msg.Photo[len(msg.Photo)-1]
+		if imgURI, err := h.botClient.DownloadFileBase64(ctx, largest.FileID); err == nil && imgURI != "" {
+			imageBase64 = imgURI
+		}
+	} else if msg.Animation != nil && msg.Animation.Thumb != nil && h.botClient != nil {
+		if imgURI, err := h.botClient.DownloadFileBase64(ctx, msg.Animation.Thumb.FileID); err == nil && imgURI != "" {
+			imageBase64 = imgURI
+		}
+	} else if msg.Sticker != nil && msg.Sticker.Thumb != nil && h.botClient != nil {
+		if imgURI, err := h.botClient.DownloadFileBase64(ctx, msg.Sticker.Thumb.FileID); err == nil && imgURI != "" {
+			imageBase64 = imgURI
+		}
+	}
+
+	// Check replied message for image / GIF / sticker if not in current message
+	if imageBase64 == "" && msg.ReplyToMessage != nil {
+		if msg.ReplyToMessage.ImageBase64 != "" {
+			imageBase64 = msg.ReplyToMessage.ImageBase64
+		} else if len(msg.ReplyToMessage.Photo) > 0 && h.botClient != nil {
+			largest := msg.ReplyToMessage.Photo[len(msg.ReplyToMessage.Photo)-1]
+			if imgURI, err := h.botClient.DownloadFileBase64(ctx, largest.FileID); err == nil && imgURI != "" {
+				imageBase64 = imgURI
+			}
+		} else if msg.ReplyToMessage.Animation != nil && msg.ReplyToMessage.Animation.Thumb != nil && h.botClient != nil {
+			if imgURI, err := h.botClient.DownloadFileBase64(ctx, msg.ReplyToMessage.Animation.Thumb.FileID); err == nil && imgURI != "" {
+				imageBase64 = imgURI
+			}
+		} else if msg.ReplyToMessage.Sticker != nil && msg.ReplyToMessage.Sticker.Thumb != nil && h.botClient != nil {
+			if imgURI, err := h.botClient.DownloadFileBase64(ctx, msg.ReplyToMessage.Sticker.Thumb.FileID); err == nil && imgURI != "" {
+				imageBase64 = imgURI
+			}
+		}
+	}
+
+	// 6. Assemble Tools
 	var tools []domain.ToolDefinition
 	tools = append(tools, ai.GetConversationTools()...)
 	tools = append(tools, ai.GetContactAdminTools()...)
@@ -180,13 +219,57 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 	// If current message was not in recent history, append it as the latest user turn
 	if !hasCurrentInHistory {
 		content := text
-		if !isPrivateChat && username != "" {
-			content = fmt.Sprintf("%s: %s", username, text)
+		if content == "" && imageBase64 != "" {
+			content = "Look at this image / GIF"
 		}
-		messages = append(messages, domain.ChatMessage{
-			Role:    "user",
-			Content: content,
-		})
+		if !isPrivateChat && username != "" {
+			content = fmt.Sprintf("%s: %s", username, content)
+		}
+		if imageBase64 != "" {
+			log.Printf("[Conversation] Attaching multimodal image to AI request (base64 length=%d)", len(imageBase64))
+			messages = append(messages, domain.ChatMessage{
+				Role: "user",
+				Content: []domain.ChatMessageContentPart{
+					{
+						Type: "text",
+						Text: content,
+					},
+					{
+						Type: "image_url",
+						ImageURL: &domain.ImageURLDetail{
+							URL: imageBase64,
+						},
+					},
+				},
+			})
+		} else {
+			messages = append(messages, domain.ChatMessage{
+				Role:    "user",
+				Content: content,
+			})
+		}
+	} else if imageBase64 != "" {
+		// Update last user message in multi-turn history to include vision image
+		if len(messages) > 0 && messages[len(messages)-1].Role == "user" {
+			lastMsg := messages[len(messages)-1]
+			textStr := lastMsg.GetStringContent()
+			log.Printf("[Conversation] Attaching multimodal image to last history user message (base64 length=%d)", len(imageBase64))
+			messages[len(messages)-1] = domain.ChatMessage{
+				Role: "user",
+				Content: []domain.ChatMessageContentPart{
+					{
+						Type: "text",
+						Text: textStr,
+					},
+					{
+						Type: "image_url",
+						ImageURL: &domain.ImageURLDetail{
+							URL: imageBase64,
+						},
+					},
+				},
+			}
+		}
 	}
 
 	opts := ai.ChatCompletionOptions{

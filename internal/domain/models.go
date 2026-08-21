@@ -33,6 +33,28 @@ type PhotoSize struct {
 	FileSize     int    `json:"file_size,omitempty"`
 }
 
+type Sticker struct {
+	FileID       string     `json:"file_id"`
+	FileUniqueID string     `json:"file_unique_id"`
+	Width        int        `json:"width"`
+	Height       int        `json:"height"`
+	IsAnimated   bool       `json:"is_animated"`
+	IsVideo      bool       `json:"is_video"`
+	Thumb        *PhotoSize `json:"thumb,omitempty"`
+	Emoji        string     `json:"emoji,omitempty"`
+}
+
+type Animation struct {
+	FileID       string     `json:"file_id"`
+	FileUniqueID string     `json:"file_unique_id"`
+	Width        int        `json:"width"`
+	Height       int        `json:"height"`
+	Duration     int        `json:"duration"`
+	Thumb        *PhotoSize `json:"thumb,omitempty"`
+	MimeType     string     `json:"mime_type,omitempty"`
+	FileSize     int        `json:"file_size,omitempty"`
+}
+
 type TelegramMessage struct {
 	MessageID       int              `json:"message_id"`
 	From            *TelegramUser    `json:"from,omitempty"`
@@ -46,11 +68,14 @@ type TelegramMessage struct {
 	Caption         string           `json:"caption,omitempty"`
 	Entities        []any            `json:"entities,omitempty"`
 	Photo           []PhotoSize      `json:"photo,omitempty"`
+	Sticker         *Sticker         `json:"sticker,omitempty"`
+	Animation       *Animation       `json:"animation,omitempty"`
 	NewChatMembers  []TelegramUser   `json:"new_chat_members,omitempty"`
 	LeftChatMember  *TelegramUser    `json:"left_chat_member,omitempty"`
 	NewChatTitle    string           `json:"new_chat_title,omitempty"`
 	MigrateToChatID int64            `json:"migrate_to_chat_id,omitempty"`
 	IsUserbot       bool             `json:"is_userbot,omitempty"`
+	ImageBase64     string           `json:"image_base64,omitempty"`
 }
 
 type CallbackQuery struct {

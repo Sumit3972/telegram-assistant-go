@@ -3,6 +3,7 @@ package telegram
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"telegram-ai-assistant/internal/domain"
@@ -398,6 +400,49 @@ func (c *BotClient) GetFile(ctx context.Context, fileID string) (*domain.Telegra
 		return nil, err
 	}
 	return &file, nil
+}
+
+func (c *BotClient) DownloadFileBase64(ctx context.Context, fileID string) (string, error) {
+	file, err := c.GetFile(ctx, fileID)
+	if err != nil {
+		return "", err
+	}
+	if file == nil || file.FilePath == "" {
+		return "", fmt.Errorf("file path empty for file_id %s", fileID)
+	}
+
+	fileURL := fmt.Sprintf("https://api.telegram.org/file/bot%s/%s", c.token, file.FilePath)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fileURL, nil)
+	if err != nil {
+		return "", err
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("failed to download file from telegram: HTTP %d", resp.StatusCode)
+	}
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	mime := "image/jpeg"
+	lower := strings.ToLower(file.FilePath)
+	if strings.HasSuffix(lower, ".png") {
+		mime = "image/png"
+	} else if strings.HasSuffix(lower, ".webp") {
+		mime = "image/webp"
+	} else if strings.HasSuffix(lower, ".gif") {
+		mime = "image/gif"
+	}
+
+	return fmt.Sprintf("data:%s;base64,%s", mime, base64.StdEncoding.EncodeToString(data)), nil
 }
 
 func (c *BotClient) SetWebhook(ctx context.Context, webhookURL string, allowedUpdates []string) (bool, error) {

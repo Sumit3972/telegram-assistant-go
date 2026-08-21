@@ -248,7 +248,8 @@ func (ub *UserbotManager) Start(ctx context.Context) error {
 				}
 
 				// If reply sender not determined yet, fetch the replied message directly from MTProto
-				if replySenderID == 0 && ub.rawAPI != nil {
+				var replyImageBase64 string
+				if ub.rawAPI != nil {
 					if peerChannel, ok := msg.PeerID.(*tg.PeerChannel); ok {
 						if inputPeer, err := ub.getInputPeer(ctx, peerChannel.ChannelID); err == nil {
 							if inCh, ok := inputPeer.(*tg.InputPeerChannel); ok {
@@ -262,17 +263,24 @@ func (ub *UserbotManager) Start(ctx context.Context) error {
 										for _, m := range v.Messages {
 											if fullM, ok := m.(*tg.Message); ok {
 												replyText = fullM.Message
-												if fullM.Out {
-													replySenderID = selfID
-													replyUsername = ub.MyUsername
-													replyFirstName = ub.MyName
-												} else if pUser, ok := fullM.FromID.(*tg.PeerUser); ok {
-													replySenderID = pUser.UserID
-													for _, u := range v.Users {
-														if user, ok := u.(*tg.User); ok && user.ID == replySenderID {
-															replyUsername = user.Username
-															replyFirstName = user.FirstName
-															break
+												if fullM.Media != nil {
+													if img, err := ub.downloadMediaBase64(ctx, fullM.Media); err == nil && img != "" {
+														replyImageBase64 = img
+													}
+												}
+												if replySenderID == 0 {
+													if fullM.Out {
+														replySenderID = selfID
+														replyUsername = ub.MyUsername
+														replyFirstName = ub.MyName
+													} else if pUser, ok := fullM.FromID.(*tg.PeerUser); ok {
+														replySenderID = pUser.UserID
+														for _, u := range v.Users {
+															if user, ok := u.(*tg.User); ok && user.ID == replySenderID {
+																replyUsername = user.Username
+																replyFirstName = user.FirstName
+																break
+															}
 														}
 													}
 												}
@@ -290,17 +298,24 @@ func (ub *UserbotManager) Start(ctx context.Context) error {
 								for _, m := range v.Messages {
 									if fullM, ok := m.(*tg.Message); ok {
 										replyText = fullM.Message
-										if fullM.Out {
-											replySenderID = selfID
-											replyUsername = ub.MyUsername
-											replyFirstName = ub.MyName
-										} else if pUser, ok := fullM.FromID.(*tg.PeerUser); ok {
-											replySenderID = pUser.UserID
-											for _, u := range v.Users {
-												if user, ok := u.(*tg.User); ok && user.ID == replySenderID {
-													replyUsername = user.Username
-													replyFirstName = user.FirstName
-													break
+										if fullM.Media != nil {
+											if img, err := ub.downloadMediaBase64(ctx, fullM.Media); err == nil && img != "" {
+												replyImageBase64 = img
+											}
+										}
+										if replySenderID == 0 {
+											if fullM.Out {
+												replySenderID = selfID
+												replyUsername = ub.MyUsername
+												replyFirstName = ub.MyName
+											} else if pUser, ok := fullM.FromID.(*tg.PeerUser); ok {
+												replySenderID = pUser.UserID
+												for _, u := range v.Users {
+													if user, ok := u.(*tg.User); ok && user.ID == replySenderID {
+														replyUsername = user.Username
+														replyFirstName = user.FirstName
+														break
+													}
 												}
 											}
 										}
@@ -310,17 +325,24 @@ func (ub *UserbotManager) Start(ctx context.Context) error {
 								for _, m := range v.Messages {
 									if fullM, ok := m.(*tg.Message); ok {
 										replyText = fullM.Message
-										if fullM.Out {
-											replySenderID = selfID
-											replyUsername = ub.MyUsername
-											replyFirstName = ub.MyName
-										} else if pUser, ok := fullM.FromID.(*tg.PeerUser); ok {
-											replySenderID = pUser.UserID
-											for _, u := range v.Users {
-												if user, ok := u.(*tg.User); ok && user.ID == replySenderID {
-													replyUsername = user.Username
-													replyFirstName = user.FirstName
-													break
+										if fullM.Media != nil {
+											if img, err := ub.downloadMediaBase64(ctx, fullM.Media); err == nil && img != "" {
+												replyImageBase64 = img
+											}
+										}
+										if replySenderID == 0 {
+											if fullM.Out {
+												replySenderID = selfID
+												replyUsername = ub.MyUsername
+												replyFirstName = ub.MyName
+											} else if pUser, ok := fullM.FromID.(*tg.PeerUser); ok {
+												replySenderID = pUser.UserID
+												for _, u := range v.Users {
+													if user, ok := u.(*tg.User); ok && user.ID == replySenderID {
+														replyUsername = user.Username
+														replyFirstName = user.FirstName
+														break
+													}
 												}
 											}
 										}
@@ -338,8 +360,16 @@ func (ub *UserbotManager) Start(ctx context.Context) error {
 						Username:  replyUsername,
 						FirstName: replyFirstName,
 					},
-					Text: replyText,
+					Text:        replyText,
+					ImageBase64: replyImageBase64,
 				}
+			}
+		}
+
+		var imageBase64 string
+		if msg.Media != nil && ub.rawAPI != nil {
+			if img, err := ub.downloadMediaBase64(ctx, msg.Media); err == nil && img != "" {
+				imageBase64 = img
 			}
 		}
 
@@ -362,6 +392,7 @@ func (ub *UserbotManager) Start(ctx context.Context) error {
 				},
 				ReplyToMessage: replyToMsg,
 				Text:           msg.Message,
+				ImageBase64:    imageBase64,
 				Date:           int64(msg.Date),
 			},
 		}
@@ -772,5 +803,70 @@ func (ub *UserbotManager) IsTriggered(text string, isPrivate bool, replyToUserID
 	}
 
 	return false
+}
+
+// downloadMediaBase64 downloads photo or document media from an MTProto message as a base64 data URI.
+func (ub *UserbotManager) downloadMediaBase64(ctx context.Context, media tg.MessageMediaClass) (string, error) {
+	if media == nil {
+		return "", fmt.Errorf("media is nil")
+	}
+
+	ub.senderMu.RLock()
+	rawAPI := ub.rawAPI
+	ub.senderMu.RUnlock()
+
+	if rawAPI == nil {
+		return "", fmt.Errorf("rawAPI is nil")
+	}
+
+	var loc tg.InputFileLocationClass
+	mime := "image/jpeg"
+
+	switch v := media.(type) {
+	case *tg.MessageMediaPhoto:
+		if p, ok := v.Photo.(*tg.Photo); ok {
+			loc = &tg.InputPhotoFileLocation{
+				ID:            p.ID,
+				AccessHash:    p.AccessHash,
+				FileReference: p.FileReference,
+				ThumbSize:     "m",
+			}
+		}
+	case *tg.MessageMediaDocument:
+		if doc, ok := v.Document.(*tg.Document); ok {
+			loc = &tg.InputDocumentFileLocation{
+				ID:            doc.ID,
+				AccessHash:    doc.AccessHash,
+				FileReference: doc.FileReference,
+				ThumbSize:     "m",
+			}
+			if strings.HasPrefix(doc.MimeType, "image/") {
+				mime = doc.MimeType
+			}
+		}
+	}
+
+	if loc == nil {
+		return "", fmt.Errorf("unsupported media type for vision")
+	}
+
+	// 10-second timeout context for quick media download
+	dlCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	res, err := rawAPI.UploadGetFile(dlCtx, &tg.UploadGetFileRequest{
+		Location: loc,
+		Offset:   0,
+		Limit:    1024 * 1024, // 1MB limit for vision input
+	})
+	if err != nil {
+		return "", err
+	}
+
+	if file, ok := res.(*tg.UploadFile); ok && len(file.Bytes) > 0 {
+		return fmt.Sprintf("data:%s;base64,%s", mime, base64.StdEncoding.EncodeToString(file.Bytes)), nil
+	}
+
+	return "", fmt.Errorf("empty file data returned")
 }
 

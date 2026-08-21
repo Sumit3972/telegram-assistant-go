@@ -247,37 +247,10 @@ func (m *Moderator) HandleUpdate(ctx context.Context, update *domain.TelegramUpd
 }
 
 func (m *Moderator) isTalkingToBot(msg *domain.TelegramMessage, text string) bool {
-	if text == "" {
-		return false
-	}
-
-	lowerText := strings.ToLower(text)
 	botUname := strings.ToLower(strings.TrimPrefix(m.cfg.MyPersonalUsername, "@"))
 	botName := strings.ToLower(m.cfg.MyPersonalName)
 
-	// 1. Check mention of usernames (Chvai396 and variations)
-	userNames := []string{
-		botUname,
-		"chvai396", "chavi396", "chvai",
-	}
-	for _, u := range userNames {
-		if u != "" && (strings.Contains(lowerText, "@"+u) || strings.Contains(lowerText, u)) {
-			return true
-		}
-	}
-
-	// 2. Check mention of name (Chavi Sharma and phonetic variations)
-	nameTriggers := []string{
-		botName,
-		"chavi sharma", "chavi", "chhavi", "chabi", "chaavi", "chhabbi", "chhabee",
-	}
-	for _, n := range nameTriggers {
-		if n != "" && strings.Contains(lowerText, n) {
-			return true
-		}
-	}
-
-	// 3. Check direct reply to her message
+	// 1. Check direct reply to bot's message (e.g. text reply or image sent in reply to bot)
 	if msg.ReplyToMessage != nil {
 		// A. Check by From user metadata if present
 		if msg.ReplyToMessage.From != nil {
@@ -305,6 +278,35 @@ func (m *Moderator) isTalkingToBot(msg *domain.TelegramMessage, text string) boo
 			); err == nil && isBotMsg {
 				return true
 			}
+		}
+	}
+
+	// In group chats, if not a direct reply to bot, must have text with name/mention
+	if text == "" {
+		return false
+	}
+
+	lowerText := strings.ToLower(text)
+
+	// 2. Check mention of usernames (Chvai396 and variations)
+	userNames := []string{
+		botUname,
+		"chvai396", "chavi396", "chvai",
+	}
+	for _, u := range userNames {
+		if u != "" && (strings.Contains(lowerText, "@"+u) || strings.Contains(lowerText, u)) {
+			return true
+		}
+	}
+
+	// 3. Check mention of name (Chavi Sharma and phonetic variations)
+	nameTriggers := []string{
+		botName,
+		"chavi sharma", "chavi", "chhavi", "chabi", "chaavi", "chhabbi", "chhabee",
+	}
+	for _, n := range nameTriggers {
+		if n != "" && strings.Contains(lowerText, n) {
+			return true
 		}
 	}
 

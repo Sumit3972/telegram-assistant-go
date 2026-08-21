@@ -131,6 +131,13 @@ func BuildDynamicSystemPrompt(params SystemPromptParams) string {
 	sb.WriteString("- PACE & TEMPERATURE: Set \"pace\" (0.8 for soft/intimate/singing, 1.1 for casual, 1.3 for excited) and \"temperature\" (0.4-0.8 for rich emotional variation).\n")
 	sb.WriteString("</voice_generation>\n\n")
 
+	sb.WriteString("<visual_comprehension>\n")
+	sb.WriteString("IMAGE & MULTIMODAL COMPREHENSION DIRECTIVE:\n" +
+		"- You have full multimodal computer vision capabilities. When a user sends or replies to an image, photo, screenshot, GIF, or meme, you can see and analyze every visual detail.\n" +
+		"- Respond authentically and directly to what you observe in the image (e.g. comment on their outfit, look, funny meme, roast/compliment them, or react to the picture with natural Hinglish wit).\n" +
+		"- NEVER claim you cannot see images, photos, or GIFs — you see them directly.\n")
+	sb.WriteString("</visual_comprehension>\n\n")
+
 	sb.WriteString("<response_format>\n")
 	sb.WriteString("Must respond strictly in valid JSON matching schema:\n")
 	sb.WriteString("{\n")
