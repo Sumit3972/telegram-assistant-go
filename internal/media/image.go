@@ -32,7 +32,7 @@ func NewImageService(apiURL, apiKey string, primaryModel ...string) *ImageServic
 		apiURL:       apiURL,
 		apiKey:       apiKey,
 		primaryModel: model,
-		httpClient:   &http.Client{Timeout: 240 * time.Second},
+		httpClient:   &http.Client{Timeout: 300 * time.Second},
 	}
 }
 
@@ -136,8 +136,8 @@ func (s *ImageService) GenerateImage(ctx context.Context, prompt string) (*Gener
 
 		bodyBytes, _ := json.Marshal(reqBody)
 
-		// Enforce a strict 120-second timeout per model attempt
-		attemptCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+		// Enforce a strict 200-second timeout per model attempt
+		attemptCtx, cancel := context.WithTimeout(ctx, 200*time.Second)
 
 		httpReq, err := http.NewRequestWithContext(attemptCtx, http.MethodPost, s.apiURL, bytes.NewReader(bodyBytes))
 		if err != nil {
@@ -153,7 +153,7 @@ func (s *ImageService) GenerateImage(ctx context.Context, prompt string) (*Gener
 		resp, err := s.httpClient.Do(httpReq)
 		if err != nil {
 			cancel()
-			log.Printf("[ImageService] Model %s failed (or timed out after 120s): %v", model, err)
+			log.Printf("[ImageService] Model %s failed (or timed out after 200s): %v", model, err)
 			lastErr = err
 			s.fallbackDelay(ctx, i, len(models))
 			continue
