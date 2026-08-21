@@ -158,10 +158,10 @@ func (c *Client) executeCandidates(
 
 	var lastErr error
 	for i, cand := range toTry {
-		// Skip text-only models for vision requests
+		// For vision/image processing requests, exclusively use Justwoker and Gorouter providers
 		if isVision {
-			lm := strings.ToLower(cand.Model)
-			if strings.Contains(lm, "deepseek") || strings.Contains(lm, "minimax") || strings.Contains(lm, "zinc") || strings.Contains(lm, "hy3") || strings.Contains(lm, "grok-composer") || strings.Contains(lm, "doubao-seed") {
+			bu := strings.ToLower(cand.Provider.BaseURL)
+			if !strings.Contains(bu, "justwoker") && !strings.Contains(bu, "gorouter") {
 				continue
 			}
 		}
