@@ -247,6 +247,12 @@ func (m *Moderator) HandleUpdate(ctx context.Context, update *domain.TelegramUpd
 }
 
 func (m *Moderator) isTalkingToBot(msg *domain.TelegramMessage, text string) bool {
+	// In groups, ignore empty messages with no text and no photos/media to prevent meaningless AI triggers
+	hasMedia := msg.ImageBase64 != "" || len(msg.Photo) > 0
+	if strings.TrimSpace(text) == "" && !hasMedia {
+		return false
+	}
+
 	botUname := strings.ToLower(strings.TrimPrefix(m.cfg.MyPersonalUsername, "@"))
 	botName := strings.ToLower(m.cfg.MyPersonalName)
 

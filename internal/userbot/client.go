@@ -199,10 +199,16 @@ func (ub *UserbotManager) Start(ctx context.Context) error {
 			if ch, ok := e.Channels[chatID]; ok {
 				title = ch.Title
 				inputPeer = ch.AsInputPeer()
+			} else {
+				inputPeer = &tg.InputPeerChannelFromMessage{
+					Peer:      &tg.InputPeerSelf{},
+					MsgID:     msg.ID,
+					ChannelID: peerChannel.ChannelID,
+				}
 			}
 		}
 
-		if inputPeer == nil && senderID > 0 {
+		if inputPeer == nil && chatType == "private" && senderID > 0 {
 			inputPeer = &tg.InputPeerUserFromMessage{
 				Peer:   &tg.InputPeerSelf{},
 				MsgID:  msg.ID,
@@ -213,7 +219,11 @@ func (ub *UserbotManager) Start(ctx context.Context) error {
 		if inputPeer != nil {
 			ub.peerMu.Lock()
 			ub.peerCache[chatID] = inputPeer
-			if senderID > 0 {
+			if chatType == "supergroup" {
+				// Also cache with Telegram Bot API -100 prefix format
+				botChatID := -1000000000000 - chatID
+				ub.peerCache[botChatID] = inputPeer
+			} else if chatType == "private" && senderID > 0 {
 				ub.peerCache[senderID] = inputPeer
 			}
 			ub.peerMu.Unlock()
@@ -502,12 +512,28 @@ func (ub *UserbotManager) getInputPeer(ctx context.Context, chatID int64) (tg.In
 		return peer, nil
 	}
 
+	channelID := chatID
+	if channelID < -1000000000000 {
+		channelID = -1 * (channelID + 1000000000000)
+	} else if channelID < 0 {
+		channelID = -channelID
+	}
+
 	ub.senderMu.RLock()
 	peersMgr := ub.peers
+	rawAPI := ub.rawAPI
 	ub.senderMu.RUnlock()
 
 	if peersMgr != nil {
-		// 1. Try resolving as user
+		// 1. Try resolving as channel/supergroup first
+		if p, err := peersMgr.ResolvePeer(ctx, &tg.PeerChannel{ChannelID: channelID}); err == nil && p != nil {
+			inputPeer := p.InputPeer()
+			ub.peerMu.Lock()
+			ub.peerCache[chatID] = inputPeer
+			ub.peerMu.Unlock()
+			return inputPeer, nil
+		}
+		// 2. Try resolving as user
 		if u, err := peersMgr.ResolveUserID(ctx, chatID); err == nil {
 			inputPeer := u.InputPeer()
 			ub.peerMu.Lock()
@@ -515,16 +541,8 @@ func (ub *UserbotManager) getInputPeer(ctx context.Context, chatID int64) (tg.In
 			ub.peerMu.Unlock()
 			return inputPeer, nil
 		}
-		// 2. Try resolving as chat
-		if p, err := peersMgr.ResolvePeer(ctx, &tg.PeerChat{ChatID: chatID}); err == nil && p != nil {
-			inputPeer := p.InputPeer()
-			ub.peerMu.Lock()
-			ub.peerCache[chatID] = inputPeer
-			ub.peerMu.Unlock()
-			return inputPeer, nil
-		}
-		// 3. Try resolving as channel/supergroup
-		if p, err := peersMgr.ResolvePeer(ctx, &tg.PeerChannel{ChannelID: chatID}); err == nil && p != nil {
+		// 3. Try resolving as chat
+		if p, err := peersMgr.ResolvePeer(ctx, &tg.PeerChat{ChatID: channelID}); err == nil && p != nil {
 			inputPeer := p.InputPeer()
 			ub.peerMu.Lock()
 			ub.peerCache[chatID] = inputPeer
@@ -533,12 +551,38 @@ func (ub *UserbotManager) getInputPeer(ctx context.Context, chatID int64) (tg.In
 		}
 	}
 
-	ub.senderMu.RLock()
-	rawAPI := ub.rawAPI
-	ub.senderMu.RUnlock()
-
 	if rawAPI != nil {
-		// 4. Try querying Telegram UsersGetUsers directly
+		// 4. Try querying ChannelsGetChannels directly if channel ID
+		if channelID > 0 {
+			resCh, err := rawAPI.ChannelsGetChannels(ctx, []tg.InputChannelClass{
+				&tg.InputChannel{ChannelID: channelID, AccessHash: 0},
+			})
+			if err == nil && resCh != nil {
+				for _, chClass := range resCh.GetChats() {
+					switch ch := chClass.(type) {
+					case *tg.Channel:
+						inputPeer := &tg.InputPeerChannel{
+							ChannelID:  ch.ID,
+							AccessHash: ch.AccessHash,
+						}
+						ub.peerMu.Lock()
+						ub.peerCache[chatID] = inputPeer
+						ub.peerMu.Unlock()
+						return inputPeer, nil
+					case *tg.Chat:
+						inputPeer := &tg.InputPeerChat{
+							ChatID: ch.ID,
+						}
+						ub.peerMu.Lock()
+						ub.peerCache[chatID] = inputPeer
+						ub.peerMu.Unlock()
+						return inputPeer, nil
+					}
+				}
+			}
+		}
+
+		// 5. Try querying Telegram UsersGetUsers directly
 		res, err := rawAPI.UsersGetUsers(ctx, []tg.InputUserClass{
 			&tg.InputUser{UserID: chatID, AccessHash: 0},
 		})
@@ -557,8 +601,11 @@ func (ub *UserbotManager) getInputPeer(ctx context.Context, chatID int64) (tg.In
 		}
 	}
 
-	// 5. Fallback: Default InputPeerUser
-	return &tg.InputPeerUser{UserID: chatID, AccessHash: 0}, nil
+	// 6. Fallback based on ID range
+	if chatID > 0 {
+		return &tg.InputPeerUser{UserID: chatID, AccessHash: 0}, nil
+	}
+	return &tg.InputPeerChannel{ChannelID: channelID, AccessHash: 0}, nil
 }
 
 // SendMessage sends a text message from the real personal account via MTProto.
@@ -594,18 +641,41 @@ func (ub *UserbotManager) SendMessage(ctx context.Context, chatID int64, text st
 		_, sendErr = snd.To(peer).Text(ctx, text)
 	}
 
-	// If sendErr is PEER_ID_INVALID and replyToID > 0, retry with InputPeerUserFromMessage
-	if sendErr != nil && strings.Contains(sendErr.Error(), "PEER_ID_INVALID") && replyToID > 0 {
-		fallbackPeer := &tg.InputPeerUserFromMessage{
+	// If sendErr is CHANNEL_INVALID or PEER_ID_INVALID and replyToID > 0, retry with ChannelFromMessage or UserFromMessage
+	if sendErr != nil && (strings.Contains(sendErr.Error(), "CHANNEL_INVALID") || strings.Contains(sendErr.Error(), "PEER_ID_INVALID")) && replyToID > 0 {
+		channelID := chatID
+		if channelID < -1000000000000 {
+			channelID = -1 * (channelID + 1000000000000)
+		} else if channelID < 0 {
+			channelID = -channelID
+		}
+
+		// Try channel from message
+		chPeer := &tg.InputPeerChannelFromMessage{
+			Peer:      &tg.InputPeerSelf{},
+			MsgID:     replyToID,
+			ChannelID: channelID,
+		}
+		_, chErr := snd.To(chPeer).Reply(replyToID).Text(ctx, text)
+		if chErr == nil {
+			ub.peerMu.Lock()
+			ub.peerCache[chatID] = chPeer
+			ub.peerMu.Unlock()
+			return nil
+		}
+
+		// Try user from message
+		fallbackUserPeer := &tg.InputPeerUserFromMessage{
 			Peer:   &tg.InputPeerSelf{},
 			MsgID:  replyToID,
 			UserID: chatID,
 		}
-		_, sendErr = snd.To(fallbackPeer).Reply(replyToID).Text(ctx, text)
-		if sendErr == nil {
+		_, userErr := snd.To(fallbackUserPeer).Reply(replyToID).Text(ctx, text)
+		if userErr == nil {
 			ub.peerMu.Lock()
-			ub.peerCache[chatID] = fallbackPeer
+			ub.peerCache[chatID] = fallbackUserPeer
 			ub.peerMu.Unlock()
+			return nil
 		}
 	}
 
@@ -653,6 +723,27 @@ func (ub *UserbotManager) SendPhoto(ctx context.Context, chatID int64, photoData
 		} else {
 			_, err = snd.To(peer).Media(ctx, photoMedia)
 		}
+
+		if err != nil && (strings.Contains(err.Error(), "CHANNEL_INVALID") || strings.Contains(err.Error(), "PEER_ID_INVALID")) && replyToID > 0 {
+			channelID := chatID
+			if channelID < -1000000000000 {
+				channelID = -1 * (channelID + 1000000000000)
+			} else if channelID < 0 {
+				channelID = -channelID
+			}
+			chPeer := &tg.InputPeerChannelFromMessage{
+				Peer:      &tg.InputPeerSelf{},
+				MsgID:     replyToID,
+				ChannelID: channelID,
+			}
+			_, chErr := snd.To(chPeer).Reply(replyToID).Media(ctx, photoMedia)
+			if chErr == nil {
+				ub.peerMu.Lock()
+				ub.peerCache[chatID] = chPeer
+				ub.peerMu.Unlock()
+				return nil
+			}
+		}
 		return err
 	}
 
@@ -693,12 +784,33 @@ func (ub *UserbotManager) SendVoice(ctx context.Context, chatID int64, voiceData
 		return fmt.Errorf("failed to upload voice to MTProto: %w", err)
 	}
 
-	voiceMedia := message.UploadedDocument(upload).Voice()
+	voiceMedia := message.UploadedDocument(upload).MIME("audio/ogg").Voice()
 	var sendErr error
 	if replyToID > 0 {
 		_, sendErr = snd.To(peer).Reply(replyToID).Media(ctx, voiceMedia)
 	} else {
 		_, sendErr = snd.To(peer).Media(ctx, voiceMedia)
+	}
+
+	if sendErr != nil && (strings.Contains(sendErr.Error(), "CHANNEL_INVALID") || strings.Contains(sendErr.Error(), "PEER_ID_INVALID")) && replyToID > 0 {
+		channelID := chatID
+		if channelID < -1000000000000 {
+			channelID = -1 * (channelID + 1000000000000)
+		} else if channelID < 0 {
+			channelID = -channelID
+		}
+		chPeer := &tg.InputPeerChannelFromMessage{
+			Peer:      &tg.InputPeerSelf{},
+			MsgID:     replyToID,
+			ChannelID: channelID,
+		}
+		_, chErr := snd.To(chPeer).Reply(replyToID).Media(ctx, voiceMedia)
+		if chErr == nil {
+			ub.peerMu.Lock()
+			ub.peerCache[chatID] = chPeer
+			ub.peerMu.Unlock()
+			return nil
+		}
 	}
 	return sendErr
 }
