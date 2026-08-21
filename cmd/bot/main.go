@@ -78,16 +78,10 @@ func main() {
 	providers := []ai.ProviderConfig{
 		{
 			BaseURL: "https://api.justwoker.icu/v1",
-			APIKey:  "sk-5vJ43NnW5lc4SpLtprc9qlv85Ahj32AjYIW7mp166MWDIzsA",
-			Models: []string{
-				"claude-opus-4-8",
-			},
-		},
-		{
-			BaseURL: "https://api.justwoker.icu/v1",
 			APIKey:  "sk-d2WlIK9RFjNniWReJ3SulMkSa1bA4Clfecn9wbc0ICB4LqeV",
 			Models: []string{
 				"claude-opus-4-8",
+				"claude-opus-5-thinking",
 			},
 		},
 		{

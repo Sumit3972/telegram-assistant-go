@@ -247,14 +247,16 @@ func (c *Client) request(
 
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
-	httpReq.Header.Set("HTTP-Referer", "https://github.com/RooVetGit/Roo-Code")
-	httpReq.Header.Set("X-Title", "Roo Code")
+	httpReq.Header.Set("Origin", "https://trae.ai")
+	httpReq.Header.Set("Referer", "https://trae.ai/")
+	httpReq.Header.Set("HTTP-Referer", "https://trae.ai")
+	httpReq.Header.Set("X-Title", "Trae")
 	if strings.Contains(cleanURL, "alwaysdata") || strings.Contains(cleanURL, "agentrouter") {
 		httpReq.Header.Set("Originator", "codex_cli_rs")
 		httpReq.Header.Set("User-Agent", "codex_cli_rs/0.101.0 (Mac OS 26.0.1; arm64) Apple_Terminal/464")
 		httpReq.Header.Set("Version", "0.101.0")
 	} else {
-		httpReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
+		httpReq.Header.Set("User-Agent", "Trae/1.0.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 	}
 	httpReq.Header.Set("Accept", "application/json, text/plain, */*")
 	httpReq.Header.Set("Accept-Language", "en-US,en;q=0.9")
