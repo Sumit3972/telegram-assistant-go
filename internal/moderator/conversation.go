@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -73,6 +74,16 @@ func NewConversationHandler(
 	}
 }
 
+func (h *ConversationHandler) sendChatAction(ctx context.Context, chatID int64, isUserbot bool, action string) {
+	if isUserbot && h.userbotSender != nil && h.userbotSender.IsAvailable() {
+		_ = h.userbotSender.SendChatAction(ctx, chatID, action)
+		return
+	}
+	if h.botClient != nil {
+		_ = h.botClient.SendChatAction(ctx, chatID, action)
+	}
+}
+
 func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domain.TelegramMessage, isAdmin bool) {
 	text := msg.Text
 	if text == "" {
@@ -86,6 +97,9 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 		username = msg.From.FirstName
 	}
 
+	// Trigger typing indicator immediately
+	h.sendChatAction(ctx, msg.Chat.ID, msg.IsUserbot, "typing")
+
 	// 1. Get affection score
 	affectionScore := 50
 	if rel, err := h.relRepo.GetRelationship(ctx, chatIDStr, userIDStr); err == nil && rel != nil {
@@ -98,16 +112,10 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 		rules = g.Rules
 	}
 
-	// 3. Get recent history
-	var histContext strings.Builder
+	// 3. Get recent history (used directly for multi-turn ChatMessage array)
 	recent, _ := h.historyRepo.GetRecentMessages(ctx, chatIDStr, 20)
-	if len(recent) > 0 {
-		for _, m := range recent {
-			histContext.WriteString(fmt.Sprintf("%s: %s\n", m.Username, m.MessageText))
-		}
-	}
 
-	// 4. Build System Prompt
+	// 4. Build System Prompt (history is passed as ChatMessage turns to prevent duplicate token consumption)
 	sysPrompt := prompt.BuildDynamicSystemPrompt(prompt.SystemPromptParams{
 		Identity: prompt.IdentityParams{
 			Name:     h.botName,
@@ -120,11 +128,11 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 		AffectionScore: affectionScore,
 		Rules:          rules,
 		UserText:       text,
-		WithHistory:    true,
-		HistoryContext: histContext.String(),
+		WithHistory:    false,
+		HistoryContext: "",
 	})
 
-	// 5. Assemble Tools (Note: Music tools removed so AI sings/speaks songs in voice notes)
+	// 5. Assemble Tools
 	var tools []domain.ToolDefinition
 	tools = append(tools, ai.GetConversationTools()...)
 	tools = append(tools, ai.GetContactAdminTools()...)
@@ -224,18 +232,25 @@ func (h *ConversationHandler) executeToolCall(
 	case "web_search":
 		query, _ := args["query"].(string)
 		if query != "" {
+			h.sendChatAction(ctx, msg.Chat.ID, msg.IsUserbot, "typing")
 			searchRes, err := h.searchService.Search(ctx, query)
 			if err != nil {
 				searchRes = fmt.Sprintf("Search error: %v", err)
 			}
 
-			// Add tool message and ask AI for final response
-			toolMessages := append(history, domain.ChatMessage{
-				Role:       "tool",
-				ToolCallID: tc.ID,
-				Name:       name,
-				Content:    searchRes,
-			})
+			// Add assistant message with tool calls AND tool response to satisfy OpenAI API standard
+			toolMessages := append(history,
+				domain.ChatMessage{
+					Role:      "assistant",
+					ToolCalls: []domain.ToolCall{tc},
+				},
+				domain.ChatMessage{
+					Role:       "tool",
+					ToolCallID: tc.ID,
+					Name:       name,
+					Content:    searchRes,
+				},
+			)
 
 			finalRes, err := h.aiClient.ChatCompletions(ctx, toolMessages, ai.ChatCompletionOptions{})
 			if err == nil && finalRes != nil {
@@ -275,6 +290,7 @@ func (h *ConversationHandler) generateAndSendPhoto(ctx context.Context, msg *dom
 		return
 	}
 
+	h.sendChatAction(ctx, msg.Chat.ID, msg.IsUserbot, "upload_photo")
 	log.Printf("[Conversation] Generating image directly with prompt: %s", cleanPrompt)
 	img, err := h.imageService.GenerateImage(ctx, cleanPrompt)
 	if err != nil || img == nil {
@@ -342,6 +358,7 @@ func (h *ConversationHandler) parseAndDispatchResponse(
 
 	// Handle Voice generation if requested
 	if resp.VoiceResponse != nil && resp.VoiceResponse.ShouldSpeak && resp.VoiceResponse.TTSText != "" {
+		h.sendChatAction(ctx, msg.Chat.ID, msg.IsUserbot, "record_voice")
 		audioData, err := h.voiceService.GenerateVoice(ctx, resp.VoiceResponse.TTSText)
 		if err == nil && len(audioData) > 0 {
 			h.sendVoice(ctx, msg, audioData)
@@ -366,6 +383,15 @@ func sanitizeReplyText(text string) string {
 	if t == "" {
 		return ""
 	}
+
+	// Strip hallucinated Fish Audio bracket tags like [flirty], [giggle], [whisper], [soft], etc.
+	tagRegex := regexp.MustCompile(`\[[a-zA-Z0-9_\-\s]+\]`)
+	t = tagRegex.ReplaceAllString(t, "")
+
+	// Strip asterisk roleplay actions like *smiles*, *laughs*, *blushes*
+	actionRegex := regexp.MustCompile(`\*[a-zA-Z0-9_\-\s]+\*`)
+	t = actionRegex.ReplaceAllString(t, "")
+
 	// Check for repeating bracket loops or runaway hallucinated tags (e.g. [2023][2023]...)
 	if strings.Count(t, "[") > 2 {
 		var cleanLines []string
@@ -378,7 +404,9 @@ func sanitizeReplyText(text string) string {
 		}
 		t = strings.TrimSpace(strings.Join(cleanLines, "\n"))
 	}
-	// Telegram limit safe guard
+
+	// Telegram limit safeguard
+	t = strings.TrimSpace(t)
 	if len(t) > 2000 {
 		t = strings.TrimSpace(t[:2000])
 	}

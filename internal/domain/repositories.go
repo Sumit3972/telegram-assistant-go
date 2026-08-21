@@ -87,5 +87,6 @@ type UserbotSender interface {
 	SendPhoto(ctx context.Context, chatID int64, photoData []byte, photoURL, caption string, replyToID int) error
 	SendVoice(ctx context.Context, chatID int64, voiceData []byte, replyToID int) error
 	SetReaction(ctx context.Context, chatID int64, msgID int, emoji string) error
+	SendChatAction(ctx context.Context, chatID int64, action string) error
 	IsAvailable() bool
 }

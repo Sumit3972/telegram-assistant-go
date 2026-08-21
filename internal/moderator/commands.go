@@ -23,6 +23,7 @@ type CommandHandler struct {
 	shipRepo    domain.ShipRepository
 	aiClient    *ai.Client
 	botClient   *telegram.BotClient
+	botName     string
 }
 
 func NewCommandHandler(
@@ -35,7 +36,12 @@ func NewCommandHandler(
 	shipRepo domain.ShipRepository,
 	aiClient *ai.Client,
 	botClient *telegram.BotClient,
+	botName ...string,
 ) *CommandHandler {
+	name := "Chavi"
+	if len(botName) > 0 && botName[0] != "" {
+		name = botName[0]
+	}
 	return &CommandHandler{
 		groupRepo:   groupRepo,
 		adminRepo:   adminRepo,
@@ -46,6 +52,7 @@ func NewCommandHandler(
 		shipRepo:    shipRepo,
 		aiClient:    aiClient,
 		botClient:   botClient,
+		botName:     name,
 	}
 }
 
@@ -71,11 +78,12 @@ func (h *CommandHandler) HandleCommand(ctx context.Context, msg *domain.Telegram
 	case "/start":
 		if msg.Chat.Type == "private" {
 			_ = h.adminRepo.RegisterAdminPrivateChat(ctx, senderIDStr, chatIDStr)
-			startText := "👋 Hello! I am your AI Group Assistant & Moderator.\n\n✅ If you are a group admin, your private chat is now connected to receive message forwards and alerts!"
+			startText := fmt.Sprintf("👋 Hey! Main <b>%s</b> hoon.\n\n✅ Group admins can link their private chat here to receive alerts and message reports.", h.botName)
 			_, _ = h.botClient.SendMessage(ctx, msg.Chat.ID, startText, telegram.SendMessageOptions{ParseMode: "HTML"})
 			return true
 		}
-		_, _ = h.botClient.SendMessage(ctx, msg.Chat.ID, "🤖 Janvi AI Assistant is active in this group!", telegram.SendMessageOptions{ReplyToID: msg.MessageID})
+		groupGreeting := fmt.Sprintf("✨ Hey everyone! <b>%s</b> is active here.", h.botName)
+		_, _ = h.botClient.SendMessage(ctx, msg.Chat.ID, groupGreeting, telegram.SendMessageOptions{ParseMode: "HTML", ReplyToID: msg.MessageID})
 		return true
 
 	case "/rules":

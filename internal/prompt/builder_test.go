@@ -56,3 +56,32 @@ func TestVoiceAndSelfieKeywords(t *testing.T) {
 		t.Errorf("Expected selfie request to be detected")
 	}
 }
+
+func TestDynamicEnhancerBotName(t *testing.T) {
+	promptChavi := GetSelfieFallbackConceptSystemPrompt("Chavi")
+	if !strings.Contains(promptChavi, "Chavi") {
+		t.Errorf("Expected fallback prompt to contain Chavi, got: %s", promptChavi)
+	}
+
+	promptCustom := GetSelfieFallbackConceptSystemPrompt("Aanya")
+	if !strings.Contains(promptCustom, "Aanya") {
+		t.Errorf("Expected fallback prompt to contain Aanya, got: %s", promptCustom)
+	}
+}
+
+func TestISTTimezoneInSystemPrompt(t *testing.T) {
+	params := SystemPromptParams{
+		Identity: IdentityParams{
+			Name:     "Chavi",
+			Username: "Chavi396",
+			Gender:   "female",
+		},
+		Username:       "sam",
+		FirstName:      "Sam",
+		AffectionScore: 70,
+	}
+	p := BuildDynamicSystemPrompt(params)
+	if !strings.Contains(p, "REAL-WORLD TIME IN MUMBAI (IST)") {
+		t.Errorf("Expected system prompt to contain IST time context")
+	}
+}

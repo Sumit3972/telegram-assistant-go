@@ -256,6 +256,15 @@ func (c *BotClient) SendSticker(ctx context.Context, chatID any, sticker string,
 	return &msg, nil
 }
 
+func (c *BotClient) SendChatAction(ctx context.Context, chatID any, action string) error {
+	body := map[string]any{
+		"chat_id": fmt.Sprintf("%v", chatID),
+		"action":  action,
+	}
+	var res bool
+	return c.Request(ctx, "sendChatAction", body, &res)
+}
+
 func (c *BotClient) SetMessageReaction(ctx context.Context, chatID any, messageID int, emoji string) bool {
 	body := map[string]any{
 		"chat_id":    fmt.Sprintf("%v", chatID),

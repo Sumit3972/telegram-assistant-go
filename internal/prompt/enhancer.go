@@ -75,10 +75,14 @@ MODEL DIRECTIVES & CONSTRAINTS:
 }
 
 // GetSelfieFallbackConceptSystemPrompt returns a scenario generation prompt for generic requests.
-func GetSelfieFallbackConceptSystemPrompt() string {
-	return `You are a helper that describes a simple, context-aware selfie scenario for Janvi (a 25-year-old Indian woman) based on the user's request.
+func GetSelfieFallbackConceptSystemPrompt(botName ...string) string {
+	name := "Chavi"
+	if len(botName) > 0 && botName[0] != "" {
+		name = botName[0]
+	}
+	return fmt.Sprintf(`You are a helper that describes a simple, context-aware selfie scenario for %s (a 25-year-old Indian woman) based on the user's request.
 Analyze the user's message and describe a suitable selfie scenario (e.g., her outfit, pose, location, expression).
 If the user's message is generic (like "photo bhej" or "selfie"), creatively describe a beautiful, everyday scenario (e.g., studying, having tea, casual home selfie, sunset walk).
 Keep the description natural, short (15-30 words), and focused solely on what she is doing in the photo.
-Do NOT include disclaimers, introductions, or markdown. Output ONLY the scenario description.`
+Do NOT include disclaimers, introductions, or markdown. Output ONLY the scenario description.`, name)
 }

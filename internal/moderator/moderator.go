@@ -97,7 +97,7 @@ func NewModerator(
 		karmaHandler:   NewKarmaHandler(karmaRepo, botClient),
 		captchaHandler: NewCaptchaHandler(captchaRepo, botClient),
 		mentionHandler: NewAdminMentionHandler(adminRepo, mentionRepo, historyRepo, botClient),
-		commandHandler: NewCommandHandler(groupRepo, adminRepo, warningRepo, modLogRepo, historyRepo, karmaRepo, shipRepo, aiClient, botClient),
+		commandHandler: NewCommandHandler(groupRepo, adminRepo, warningRepo, modLogRepo, historyRepo, karmaRepo, shipRepo, aiClient, botClient, cfg.MyPersonalName),
 		autoModHandler: NewAutoModHandler(groupRepo, warningRepo, modLogRepo, botClient),
 		convHandler: NewConversationHandler(
 			aiClient, imgService, voiceService, searchService, musicService,

@@ -56,6 +56,7 @@ type ChatCompletionOptions struct {
 	Tools            []domain.ToolDefinition `json:"tools,omitempty"`
 	ToolChoice       any                     `json:"tool_choice,omitempty"`
 	Temperature      *float64                `json:"temperature,omitempty"`
+	MaxTokens        *int                    `json:"max_tokens,omitempty"`
 	ResponseFormat   map[string]any          `json:"response_format,omitempty"`
 	ForceProviderURL string                  `json:"-"`
 	ForceModel       string                  `json:"-"`
@@ -229,6 +230,9 @@ func (c *Client) request(
 
 	if opts.Temperature != nil {
 		reqBody["temperature"] = *opts.Temperature
+	}
+	if opts.MaxTokens != nil {
+		reqBody["max_tokens"] = *opts.MaxTokens
 	}
 
 	jsonBytes, err := json.Marshal(reqBody)

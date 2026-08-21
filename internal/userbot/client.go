@@ -697,6 +697,38 @@ func (ub *UserbotManager) SetReaction(ctx context.Context, chatID int64, msgID i
 	return err
 }
 
+// SendChatAction sends real-time typing / recording / uploading action from the real personal account.
+func (ub *UserbotManager) SendChatAction(ctx context.Context, chatID int64, action string) error {
+	ub.senderMu.RLock()
+	rawAPI := ub.rawAPI
+	ub.senderMu.RUnlock()
+
+	if rawAPI == nil {
+		return fmt.Errorf("userbot MTProto client is not connected")
+	}
+
+	peer, err := ub.getInputPeer(ctx, chatID)
+	if err != nil {
+		return err
+	}
+
+	var tgAction tg.SendMessageActionClass
+	switch action {
+	case "upload_photo":
+		tgAction = &tg.SendMessageUploadPhotoAction{}
+	case "record_voice":
+		tgAction = &tg.SendMessageRecordAudioAction{}
+	default:
+		tgAction = &tg.SendMessageTypingAction{}
+	}
+
+	_, err = rawAPI.MessagesSetTyping(ctx, &tg.MessagesSetTypingRequest{
+		Peer:   peer,
+		Action: tgAction,
+	})
+	return err
+}
+
 // IsSpamming checks if a user sent more than 3 messages within 10 seconds.
 func (ub *UserbotManager) IsSpamming(chatID string, userID string) bool {
 	ub.spamMu.Lock()
