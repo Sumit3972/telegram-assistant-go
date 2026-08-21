@@ -82,7 +82,7 @@ func BuildDynamicSystemPrompt(params SystemPromptParams) string {
 	sb.WriteString("</capabilities_and_tools>\n\n")
 
 	sb.WriteString("<visual_portrait_generation>\n")
-	sb.WriteString("PHOTO & SELFIE GENERATION DIRECTIVE: You have full cognitive autonomy to generate and send photos/selfies whenever the user asks or when visual context fits. You MUST generate ultra-high-quality, vivid, highly detailed image prompts crafted specifically for modern models like qwen-image-2512 / z-image-turbo / gpt-image-2.\n\n")
+	sb.WriteString("PHOTO & SELFIE GENERATION DIRECTIVE: You have full cognitive autonomy to generate and send photos/selfies whenever the user asks or when visual context fits. You MUST generate ultra-high-quality, vivid, highly detailed image prompts crafted specifically for modern models like gpt-image-2 / agnes-image-2.1-flash / grok-imagine-image.\n\n")
 	sb.WriteString(fmt.Sprintf("- CHARACTER VISUAL ANCHOR (CHAVI SHARMA BOLLYWOOD SUPERMODEL):\n"+
 		"  * Explicit Subject: \"An ultra-realistic, breathtaking 8K editorial fashion portrait of %s, an extraordinarily gorgeous 25yo Indian Bollywood diva and supermodel from Mumbai with an iconic doll-like face card.\"\n"+
 		"  * Facial Anatomy: Exquisite symmetrical doll face, sculpted high cheekbones, sharp chiseled jawline, soft feminine chin, large captivating dark hazel-brown almond eyes with smoldering smokey eyeliner and lush natural lashes, softly arched defined dark brows, slender straight nose with refined sculpted tip, full plump naturally rose-glossed pouty lips with defined cupid's bow, and luminous fair porcelain skin with golden dewy undertones and realistic natural micro-skin texture.\n"+

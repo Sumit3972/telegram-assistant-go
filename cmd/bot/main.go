@@ -80,8 +80,11 @@ func main() {
 			BaseURL: "https://novarouter.site/api/v1",
 			APIKey:  "nr_sk_JBswU_kp6fKPGtuDpKZGoqUUBags",
 			Models: []string{
+				"claude-fable-5",
+				"claude-opus-5",
 				"gpt-5.6-sol",
 				"gemini-3-pro",
+				"claude-sonnet-5",
 			},
 		},
 		{

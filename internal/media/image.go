@@ -66,9 +66,9 @@ func sanitizePromptForModel(model, rawPrompt string) string {
 		clean += ", 8K UHD portrait, editorial photography, sharp focus, natural skin texture, soft cinematic lighting, zero watermark"
 	}
 
-	// Strictly limit prompt length for models with character limits (e.g. Qwen & Z-Image require <= 1024 chars; GPT-Image-2 allows up to 4000)
+	// Strictly limit prompt length for models with character limits (e.g. Z-Image requires <= 1024 chars; GPT-Image-2 allows up to 4000)
 	maxLen := 4000
-	if strings.Contains(strings.ToLower(model), "qwen") || strings.Contains(strings.ToLower(model), "z-image") {
+	if strings.Contains(strings.ToLower(model), "z-image") {
 		maxLen = 1000
 	}
 
@@ -105,11 +105,11 @@ func (s *ImageService) GenerateImage(ctx context.Context, prompt string) (*Gener
 	models := []string{primary}
 	fallbacks := []string{
 		"gpt-image-2",
-		"qwen-image-2512",
-		"z-image-turbo",
-		"grok-imagine-image-quality-lite",
-		"grok-imagine-image-lite",
+		"agnes-image-2.1-flash",
 		"grok-imagine-image",
+		"agnes-image-2.0-flash",
+		"grok-imagine-image-lite",
+		"grok-imagine-image-edit",
 	}
 	for _, m := range fallbacks {
 		if m != primary {
@@ -119,6 +119,10 @@ func (s *ImageService) GenerateImage(ctx context.Context, prompt string) (*Gener
 
 	var lastErr error
 	for i, model := range models {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+
 		modelPrompt := sanitizePromptForModel(model, prompt)
 		log.Printf("[ImageService] Generating image via %s (attempt %d/%d, promptLen=%d)...", model, i+1, len(models), len(modelPrompt))
 
@@ -131,8 +135,13 @@ func (s *ImageService) GenerateImage(ctx context.Context, prompt string) (*Gener
 		}
 
 		bodyBytes, _ := json.Marshal(reqBody)
-		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, s.apiURL, bytes.NewReader(bodyBytes))
+
+		// Enforce a strict 120-second timeout per model attempt
+		attemptCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+
+		httpReq, err := http.NewRequestWithContext(attemptCtx, http.MethodPost, s.apiURL, bytes.NewReader(bodyBytes))
 		if err != nil {
+			cancel()
 			lastErr = err
 			s.fallbackDelay(ctx, i, len(models))
 			continue
@@ -143,7 +152,8 @@ func (s *ImageService) GenerateImage(ctx context.Context, prompt string) (*Gener
 
 		resp, err := s.httpClient.Do(httpReq)
 		if err != nil {
-			log.Printf("[ImageService] Model %s failed: %v", model, err)
+			cancel()
+			log.Printf("[ImageService] Model %s failed (or timed out after 120s): %v", model, err)
 			lastErr = err
 			s.fallbackDelay(ctx, i, len(models))
 			continue
@@ -153,6 +163,7 @@ func (s *ImageService) GenerateImage(ctx context.Context, prompt string) (*Gener
 		resp.Body.Close()
 
 		if resp.StatusCode >= 400 {
+			cancel()
 			errStr := string(respBytes)
 			log.Printf("[ImageService] Model %s HTTP %d: %s", model, resp.StatusCode, errStr)
 			lastErr = fmt.Errorf("HTTP %d: %s", resp.StatusCode, errStr)
@@ -172,6 +183,7 @@ func (s *ImageService) GenerateImage(ctx context.Context, prompt string) (*Gener
 			if item.B64JSON != "" {
 				decoded, err := base64.StdEncoding.DecodeString(item.B64JSON)
 				if err == nil && len(decoded) > 0 {
+					cancel()
 					log.Printf("[ImageService] Successfully generated b64 image via %s!", model)
 					return &GeneratedImage{
 						Data:        decoded,
@@ -181,7 +193,8 @@ func (s *ImageService) GenerateImage(ctx context.Context, prompt string) (*Gener
 			}
 			if item.URL != "" {
 				log.Printf("[ImageService] Successfully generated image URL via %s: %s", model, item.URL)
-				downloaded, err := s.downloadImage(ctx, item.URL)
+				downloaded, err := s.downloadImage(attemptCtx, item.URL)
+				cancel()
 				if err == nil && len(downloaded) > 0 {
 					return &GeneratedImage{
 						Data:        downloaded,
@@ -194,6 +207,7 @@ func (s *ImageService) GenerateImage(ctx context.Context, prompt string) (*Gener
 				}, nil
 			}
 		}
+		cancel()
 
 		lastErr = fmt.Errorf("unexpected image response: %s", string(respBytes))
 		s.fallbackDelay(ctx, i, len(models))
