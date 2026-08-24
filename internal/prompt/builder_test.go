@@ -81,7 +81,7 @@ func TestISTTimezoneInSystemPrompt(t *testing.T) {
 		AffectionScore: 70,
 	}
 	p := BuildDynamicSystemPrompt(params)
-	if !strings.Contains(p, "REAL-WORLD TIME IN MUMBAI (IST)") {
+	if !strings.Contains(p, "REAL-WORLD TIME IN DELHI (IST)") {
 		t.Errorf("Expected system prompt to contain IST time context")
 	}
 }

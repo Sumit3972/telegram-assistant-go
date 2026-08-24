@@ -273,7 +273,8 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 	}
 
 	opts := ai.ChatCompletionOptions{
-		Tools: tools,
+		Tools:          tools,
+		ResponseFormat: map[string]any{"type": "json_object"},
 	}
 
 	log.Printf("[Conversation] Calling AI for user @%s in chat %s (turns=%d)...", username, chatIDStr, len(messages))
@@ -293,7 +294,47 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 
 	// 7. Parse structured response
 	content := res.Message.GetStringContent()
+
+	// If the model broke character (AI-identity leak / generic refusal), retry once
+	// forcing the next Nova model, since the reply violates the persona contract.
+	if isBrokenCharacterReply(content) {
+		log.Printf("[Conversation] Detected broken-character reply from %s. Retrying with next model...", res.ModelUsed)
+		retryOpts := opts
+		retryOpts.ExcludeModel = res.ModelUsed
+		if retryRes, retryErr := h.aiClient.ChatCompletions(ctx, messages, retryOpts); retryErr == nil && retryRes != nil {
+			retryContent := retryRes.Message.GetStringContent()
+			if len(retryRes.Message.ToolCalls) > 0 {
+				for _, tc := range retryRes.Message.ToolCalls {
+					h.executeToolCall(ctx, msg, tc, isAdmin, messages, userIDStr, username, chatIDStr)
+				}
+				return
+			}
+			if !isBrokenCharacterReply(retryContent) {
+				content = retryContent
+			}
+		}
+	}
+
 	h.parseAndDispatchResponse(ctx, msg, content, text, userIDStr, username, chatIDStr)
+}
+
+// isBrokenCharacterReply detects when the model breaks the "real human" persona
+// contract by leaking AI-assistant identity phrases or issuing generic refusals.
+func isBrokenCharacterReply(content string) bool {
+	lower := strings.ToLower(content)
+	markers := []string{
+		"as an ai", "as a language model", "i am an ai", "i'm an ai",
+		"my design principles", "i cannot generate", "i can't generate",
+		"i cannot engage", "i can't engage", "i cannot assist", "i can't assist",
+		"i am not able to", "i'm not able to", "i am unable to", "i'm unable to",
+		"how can i help you today", "as a virtual assistant",
+	}
+	for _, m := range markers {
+		if strings.Contains(lower, m) {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *ConversationHandler) executeToolCall(

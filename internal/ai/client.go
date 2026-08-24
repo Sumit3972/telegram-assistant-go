@@ -60,6 +60,7 @@ type ChatCompletionOptions struct {
 	ResponseFormat   map[string]any          `json:"response_format,omitempty"`
 	ForceProviderURL string                  `json:"-"`
 	ForceModel       string                  `json:"-"`
+	ExcludeModel     string                  `json:"-"`
 }
 
 type ChatCompletionResult struct {
@@ -90,6 +91,9 @@ func (c *Client) ChatCompletions(ctx context.Context, messages []domain.ChatMess
 	var primaryCandidates []ModelCandidate
 	for _, provider := range c.providers {
 		for _, m := range provider.Models {
+			if opts.ExcludeModel != "" && m == opts.ExcludeModel {
+				continue
+			}
 			primaryCandidates = append(primaryCandidates, ModelCandidate{
 				Provider: provider,
 				Model:    m,
@@ -224,7 +228,8 @@ func (c *Client) request(
 		if opts.ToolChoice != nil {
 			reqBody["tool_choice"] = opts.ToolChoice
 		}
-	} else if opts.ResponseFormat != nil {
+	}
+	if opts.ResponseFormat != nil {
 		reqBody["response_format"] = opts.ResponseFormat
 	}
 
