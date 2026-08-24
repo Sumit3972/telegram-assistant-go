@@ -81,13 +81,15 @@ func main() {
 			APIKey:  "nr_sk_JBswU_kp6fKPGtuDpKZGoqUUBags",
 			Models: []string{
 				"grok-4.5",
-				"gemini-3.5-flash-lite",
-				"glm-5.2",
 				"gemini-3.6-flash",
-				"gemini-3-pro",
+				"kimi-k3",
+				"glm-5.2",
+				
 				"gpt-5.6-sol",
 				"deepseek-v4",
-				"kimi-k3",
+				
+				"gemini-3.6-flash",
+				"gemini-3-pro",
 				"claude-fable-5",
 				"claude-opus-5",
 				"claude-sonnet-5",
