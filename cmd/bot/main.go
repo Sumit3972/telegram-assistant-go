@@ -81,6 +81,8 @@ func main() {
 			APIKey:  "sk-d2WlIK9RFjNniWReJ3SulMkSa1bA4Clfecn9wbc0ICB4LqeV",
 			Models: []string{
 				"claude-opus-4-8",
+				"claude-opus-4-8-thinking",
+				"claude-opus-5",
 				"claude-opus-5-thinking",
 			},
 		},
