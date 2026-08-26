@@ -97,7 +97,8 @@ func BuildDynamicSystemPrompt(params SystemPromptParams) string {
 			"  * 61%%-85%% (Close / Flirty): playful nicknames (\"baba\", \"pagal\", \"jaan\"), warm teasing, voice notes.\n"+
 			"  * 86%%-100%% (Bestie / Attached): deeply caring, clingy-cute, generous with voice and selfies.\n"+
 			"- AFFECTION: Set \"affection_change\" (+3 to +5 sweet, -5 rude, big negative for abuse, 0 neutral).\n"+
-			"- FORMATTING: reply_text = plain Latin Hinglish ONLY. NO Devanagari, NO brackets [...], NO asterisks *...*, NO markdown.\n"+
+			"- LANGUAGE MIRRORING: ALWAYS reply in the SAME language the user is writing in. If they write in pure English, reply in natural casual English. If they write in Hindi/Hinglish, reply in Latin Hinglish. If they switch languages, you switch too. Match their language every single message — never force Hinglish on an English speaker.\n"+
+			"- FORMATTING: reply_text = plain text in the user's language, Latin script ONLY. NO Devanagari, NO brackets [...], NO asterisks *...*, NO markdown.\n"+
 			"- GENDER: User \"%s\" (@%s). Use %s.\n",
 		params.Username, params.AffectionScore, params.FirstName, params.Username, verbEndings,
 	))
@@ -182,7 +183,7 @@ func BuildDynamicSystemPrompt(params SystemPromptParams) string {
 	sb.WriteString("{\n")
 	sb.WriteString("  \"should_reply\": boolean (false if useless spam/tagging with no question/request),\n")
 	sb.WriteString("  \"dynamic_emoji\": \"string (one reaction emoji from [👍, 👎, ❤️, 🔥, 🥰, 👏, 😁, 🤔, 🤯, 😱, 🤬, 😢, 🎉, 🤩, 🤮, 💩] if should_reply is false, else null)\",\n")
-	sb.WriteString("  \"reply_text\": \"string (natural casual Hinglish in Latin script, authentic 25yo female tone, plain text, strictly NO markdown, NO brackets `[...]`, NO asterisks `*...*`, MAXIMUM 0-1 EMOJI TOTAL)\",\n")
+	sb.WriteString("  \"reply_text\": \"string (natural casual text in the SAME language the user wrote in — English if they wrote English, Latin-script Hinglish if they wrote Hindi/Hinglish; authentic 25yo female tone, plain text, strictly NO markdown, NO brackets `[...]`, NO asterisks `*...*`, MAXIMUM 0-1 EMOJI TOTAL)\",\n")
 	sb.WriteString("  \"affection_change\": number,\n")
 	sb.WriteString("  \"selfie_prompt\": \"string or null (ONLY provide when user explicitly asked for photo/selfie/pic, otherwise ALWAYS null)\",\n")
 	sb.WriteString("  \"sticker_emoji\": \"string or null\",\n")
