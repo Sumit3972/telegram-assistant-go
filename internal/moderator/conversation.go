@@ -278,11 +278,13 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 	}
 
 	log.Printf("[Conversation] Calling AI for user @%s in chat %s (turns=%d)...", username, chatIDStr, len(messages))
+	log.Printf("[Conversation] ===== SYSTEM PROMPT SENT =====\n%s\n===== END SYSTEM PROMPT =====", sysPrompt)
 	res, err := h.aiClient.ChatCompletions(ctx, messages, opts)
 	if err != nil || res == nil {
 		log.Printf("[Conversation] AI ChatCompletions error: %v", err)
 		return
 	}
+	log.Printf("[Conversation] ===== AI RESPONSE (model=%s provider=%s) =====\n%s\n===== END AI RESPONSE =====", res.ModelUsed, res.ProviderURL, res.Message.GetStringContent())
 
 	// 6. Handle Tool Calls if returned
 	if len(res.Message.ToolCalls) > 0 {
