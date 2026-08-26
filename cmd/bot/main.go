@@ -77,17 +77,6 @@ func main() {
 	// 5. Initialize AI Client
 	providers := []ai.ProviderConfig{
 		{
-			BaseURL: "https://novarouter.site/api/v1",
-			APIKey:  "nr_sk_JBswU_kp6fKPGtuDpKZGoqUUBags",
-			Models: []string{
-				"deepseek-v4",
-				"glm-5.2",
-				"kimi-k3",
-				"gpt-5.6-sol",
-				"grok-4.5",
-			},
-		},
-		{
 			BaseURL: "https://api.justwoker.icu/v1",
 			APIKey:  "sk-d2WlIK9RFjNniWReJ3SulMkSa1bA4Clfecn9wbc0ICB4LqeV",
 			Models: []string{
@@ -96,6 +85,17 @@ func main() {
 				"claude-opus-4-8-thinking",
 				"claude-opus-5",
 				
+			},
+		},
+		{
+			BaseURL: "https://novarouter.site/api/v1",
+			APIKey:  "nr_sk_JBswU_kp6fKPGtuDpKZGoqUUBags",
+			Models: []string{
+				"deepseek-v4",
+				"glm-5.2",
+				"kimi-k3",
+				"gpt-5.6-sol",
+				"grok-4.5",
 			},
 		},
 		{
