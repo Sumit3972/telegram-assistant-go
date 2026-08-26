@@ -80,11 +80,11 @@ func main() {
 			BaseURL: "https://novarouter.site/api/v1",
 			APIKey:  "nr_sk_JBswU_kp6fKPGtuDpKZGoqUUBags",
 			Models: []string{
-				"grok-4.5",
-				"kimi-k3",
-				"glm-5.2",
-				"gpt-5.6-sol",
 				"deepseek-v4",
+				"glm-5.2",
+				"kimi-k3",
+				"gpt-5.6-sol",
+				"grok-4.5",
 			},
 		},
 		{
@@ -109,9 +109,6 @@ func main() {
 			BaseURL: "https://novarouter.site/api/v1",
 			APIKey:  "nr_sk_JBswU_kp6fKPGtuDpKZGoqUUBags",
 			Models: []string{
-				"gemini-3.6-flash",
-			
-				
 				"gemini-3.6-flash",
 				"gemini-3-pro",
 				"claude-fable-5",
