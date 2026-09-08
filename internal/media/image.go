@@ -24,7 +24,7 @@ func NewImageService(apiURL, apiKey string, primaryModel ...string) *ImageServic
 	if apiURL == "" {
 		apiURL = "https://api.futureppo.top/v1/images/generations"
 	}
-	model := "grok-imagine-image-lite"
+	model := "agnes-image-2.5-flash"
 	if len(primaryModel) > 0 && primaryModel[0] != "" {
 		model = primaryModel[0]
 	}
@@ -107,17 +107,17 @@ func replaceCaseInsensitive(str, substr, repl string) string {
 func (s *ImageService) GenerateImage(ctx context.Context, prompt string) (*GeneratedImage, error) {
 	primary := s.primaryModel
 	if primary == "" {
-		primary = "grok-imagine-image-lite"
+		primary = "agnes-image-2.5-flash"
 	}
 
 	models := []string{primary}
 	fallbacks := []string{
-		"grok-imagine-image-lite",
-		"grok-imagine-image",
+		"agnes-image-2.5-flash",
 		"agnes-image-2.1-flash",
 		"agnes-image-2.0-flash",
-		"gpt-image-2",
-		"grok-imagine-image-edit",
+		"grok-imagine-image-lite",
+		"grok-imagine-image",
+		"grok-imagine-image-quality-lite",
 	}
 	for _, m := range fallbacks {
 		if m != primary {
