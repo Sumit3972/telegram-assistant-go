@@ -21,6 +21,7 @@ type ProviderConfig struct {
 	APIKey        string   `json:"api_key"`
 	Models        []string `json:"models"`
 	DynamicModels bool     `json:"dynamic_models"`
+	UseAnthropic  bool     `json:"use_anthropic"`
 }
 
 type ClientConfig struct {
@@ -180,7 +181,16 @@ func (c *Client) ChatCompletions(ctx context.Context, messages []domain.ChatMess
 	if opts.ForceProviderURL != "" && opts.ForceModel != "" {
 		for _, p := range append(c.providers, c.fallbackProviders...) {
 			if p.BaseURL == opts.ForceProviderURL {
-				msg, err := c.request(ctx, p.BaseURL, p.APIKey, opts.ForceModel, messages, opts)
+				var msg *domain.ChatMessage
+				var err error
+				if p.UseAnthropic || strings.Contains(strings.ToLower(p.BaseURL), "justwoker") {
+					msg, err = c.requestAnthropic(ctx, p.BaseURL, p.APIKey, opts.ForceModel, messages, opts)
+				} else {
+					msg, err = c.request(ctx, p.BaseURL, p.APIKey, opts.ForceModel, messages, opts)
+					if err != nil && (strings.Contains(err.Error(), "403") || strings.Contains(strings.ToLower(err.Error()), "cloudflare")) {
+						msg, err = c.requestAnthropic(ctx, p.BaseURL, p.APIKey, opts.ForceModel, messages, opts)
+					}
+				}
 				if err == nil {
 					return &ChatCompletionResult{
 						Message:     *msg,
@@ -281,7 +291,17 @@ func (c *Client) executeCandidates(
 		startTime := time.Now()
 		log.Printf("[AIClient] Attempting completion via %s with model %s (candidate %d/%d)...", cand.Provider.BaseURL, cand.Model, i+1, len(toTry))
 
-		msg, err := c.request(ctx, cand.Provider.BaseURL, cand.Provider.APIKey, cand.Model, messages, opts)
+		var msg *domain.ChatMessage
+		var err error
+		if cand.Provider.UseAnthropic || strings.Contains(strings.ToLower(cand.Provider.BaseURL), "justwoker") {
+			msg, err = c.requestAnthropic(ctx, cand.Provider.BaseURL, cand.Provider.APIKey, cand.Model, messages, opts)
+		} else {
+			msg, err = c.request(ctx, cand.Provider.BaseURL, cand.Provider.APIKey, cand.Model, messages, opts)
+			if err != nil && (strings.Contains(err.Error(), "403") || strings.Contains(strings.ToLower(err.Error()), "cloudflare")) {
+				log.Printf("[AIClient] Provider %s hit Cloudflare 403 on /chat/completions; retrying with Anthropic /messages protocol...", cand.Provider.BaseURL)
+				msg, err = c.requestAnthropic(ctx, cand.Provider.BaseURL, cand.Provider.APIKey, cand.Model, messages, opts)
+			}
+		}
 		latency := time.Since(startTime).Milliseconds()
 
 		if err == nil {
@@ -443,4 +463,191 @@ func (c *Client) request(
 	}
 
 	return &chatMsg, nil
+}
+
+func (c *Client) requestAnthropic(
+	ctx context.Context,
+	baseURL, apiKey, model string,
+	messages []domain.ChatMessage,
+	opts ChatCompletionOptions,
+) (*domain.ChatMessage, error) {
+	cleanURL := strings.TrimRight(baseURL, "/") + "/messages"
+
+	var systemPrompt string
+	var anthropicMsgs []map[string]any
+
+	for _, m := range messages {
+		if m.Role == "system" {
+			systemPrompt = m.GetStringContent()
+			continue
+		}
+
+		role := m.Role
+		if role != "user" && role != "assistant" {
+			role = "user"
+		}
+
+		switch content := m.Content.(type) {
+		case string:
+			anthropicMsgs = append(anthropicMsgs, map[string]any{
+				"role":    role,
+				"content": content,
+			})
+		case []domain.ChatMessageContentPart:
+			var parts []map[string]any
+			for _, p := range content {
+				if p.Type == "text" {
+					parts = append(parts, map[string]any{
+						"type": "text",
+						"text": p.Text,
+					})
+				} else if p.Type == "image_url" && p.ImageURL != nil {
+					url := p.ImageURL.URL
+					if strings.HasPrefix(url, "data:") {
+						semicolon := strings.Index(url, ";")
+						comma := strings.Index(url, ",")
+						if semicolon > 5 && comma > semicolon {
+							mediaType := url[5:semicolon]
+							data := url[comma+1:]
+							parts = append(parts, map[string]any{
+								"type": "image",
+								"source": map[string]any{
+									"type":       "base64",
+									"media_type": mediaType,
+									"data":       data,
+								},
+							})
+						}
+					}
+				}
+			}
+			anthropicMsgs = append(anthropicMsgs, map[string]any{
+				"role":    role,
+				"content": parts,
+			})
+		default:
+			anthropicMsgs = append(anthropicMsgs, map[string]any{
+				"role":    role,
+				"content": m.GetStringContent(),
+			})
+		}
+	}
+
+	mt := 2048
+	if opts.MaxTokens != nil && *opts.MaxTokens > 0 {
+		mt = *opts.MaxTokens
+	}
+
+	reqBody := map[string]any{
+		"model":      model,
+		"messages":   anthropicMsgs,
+		"max_tokens": mt,
+	}
+	if systemPrompt != "" {
+		reqBody["system"] = systemPrompt
+	}
+	if opts.Temperature != nil {
+		reqBody["temperature"] = *opts.Temperature
+	}
+
+	if len(opts.Tools) > 0 {
+		var tools []map[string]any
+		for _, t := range opts.Tools {
+			tools = append(tools, map[string]any{
+				"name":         t.Function.Name,
+				"description":  t.Function.Description,
+				"input_schema": t.Function.Parameters,
+			})
+		}
+		reqBody["tools"] = tools
+	}
+
+	jsonBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal anthropic request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, cleanURL, bytes.NewReader(jsonBytes))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create anthropic request: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("x-api-key", apiKey)
+	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	httpReq.Header.Set("anthropic-version", "2023-06-01")
+	httpReq.Header.Set("Origin", "https://trae.ai")
+	httpReq.Header.Set("Referer", "https://trae.ai/")
+	httpReq.Header.Set("HTTP-Referer", "https://trae.ai")
+	httpReq.Header.Set("X-Title", "Trae")
+	httpReq.Header.Set("User-Agent", "Trae/1.0.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	httpReq.Header.Set("Accept", "application/json, text/plain, */*")
+	httpReq.Header.Set("Accept-Language", "en-US,en;q=0.9")
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("anthropic request error: %w", err)
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read anthropic response body: %w", err)
+	}
+
+	if resp.StatusCode >= 400 {
+		bodyStr := string(bodyBytes)
+		if len(bodyStr) > 400 {
+			bodyStr = bodyStr[:400] + "..."
+		}
+		return nil, fmt.Errorf("Anthropic HTTP error %d: %s", resp.StatusCode, bodyStr)
+	}
+
+	var dataMap map[string]any
+	if err := json.Unmarshal(bodyBytes, &dataMap); err != nil {
+		return nil, fmt.Errorf("invalid json from Anthropic: %w", err)
+	}
+
+	if errObj, ok := dataMap["error"]; ok && errObj != nil {
+		return nil, fmt.Errorf("Anthropic API error: %v", errObj)
+	}
+
+	contentArr, ok := dataMap["content"].([]any)
+	if !ok || len(contentArr) == 0 {
+		return nil, fmt.Errorf("no content in anthropic response: %s", string(bodyBytes))
+	}
+
+	var textParts []string
+	var toolCalls []domain.ToolCall
+
+	for _, item := range contentArr {
+		itemMap, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		itemType, _ := itemMap["type"].(string)
+		if itemType == "text" {
+			if t, ok := itemMap["text"].(string); ok {
+				textParts = append(textParts, t)
+			}
+		} else if itemType == "tool_use" {
+			tID, _ := itemMap["id"].(string)
+			tName, _ := itemMap["name"].(string)
+			inputJSON, _ := json.Marshal(itemMap["input"])
+			toolCalls = append(toolCalls, domain.ToolCall{
+				ID:   tID,
+				Type: "function",
+				Function: domain.FunctionCall{
+					Name:      tName,
+					Arguments: string(inputJSON),
+				},
+			})
+		}
+	}
+
+	return &domain.ChatMessage{
+		Role:      "assistant",
+		Content:   strings.Join(textParts, ""),
+		ToolCalls: toolCalls,
+	}, nil
 }

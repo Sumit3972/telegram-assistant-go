@@ -16,6 +16,7 @@ func TestLiveJustwokerProvider(t *testing.T) {
 				BaseURL:       "https://api.justwoker.icu/v1",
 				APIKey:        "sk-d2WlIK9RFjNniWReJ3SulMkSa1bA4Clfecn9wbc0ICB4LqeV",
 				DynamicModels: true,
+				UseAnthropic:  true,
 			},
 		},
 	})
