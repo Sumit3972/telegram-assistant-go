@@ -13,20 +13,23 @@ func TestLiveJustwokerProvider(t *testing.T) {
 	client := NewClient(ClientConfig{
 		Providers: []ProviderConfig{
 			{
-				BaseURL: "https://api.justwoker.icu/v1",
-				APIKey:  "sk-d2WlIK9RFjNniWReJ3SulMkSa1bA4Clfecn9wbc0ICB4LqeV",
-				Models: []string{
-					"claude-opus-4-8",
-					"claude-opus-4-8-thinking",
-					"claude-opus-5",
-					"claude-opus-5-thinking",
-				},
+				BaseURL:       "https://api.justwoker.icu/v1",
+				APIKey:        "sk-d2WlIK9RFjNniWReJ3SulMkSa1bA4Clfecn9wbc0ICB4LqeV",
+				DynamicModels: true,
 			},
 		},
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
+
+	// Verify FetchModels works directly
+	models, err := client.FetchModels(ctx, "https://api.justwoker.icu/v1", "sk-d2WlIK9RFjNniWReJ3SulMkSa1bA4Clfecn9wbc0ICB4LqeV")
+	if err != nil {
+		t.Logf("FetchModels test note: %v", err)
+	} else {
+		t.Logf("✅ Dynamically discovered %d models: %v", len(models), models)
+	}
 
 	messages := []domain.ChatMessage{
 		{

@@ -10,15 +10,17 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"telegram-ai-assistant/internal/domain"
 )
 
 type ProviderConfig struct {
-	BaseURL string   `json:"base_url"`
-	APIKey  string   `json:"api_key"`
-	Models  []string `json:"models"`
+	BaseURL       string   `json:"base_url"`
+	APIKey        string   `json:"api_key"`
+	Models        []string `json:"models"`
+	DynamicModels bool     `json:"dynamic_models"`
 }
 
 type ClientConfig struct {
@@ -33,22 +35,25 @@ type ModelCandidate struct {
 }
 
 type Client struct {
-	providers         []ProviderConfig
-	fallbackProviders []ProviderConfig
-	perfRepo          domain.PerformanceRepository
-	cooldownMgr       *CooldownManager
-	httpClient        *http.Client
+	providers          []ProviderConfig
+	fallbackProviders  []ProviderConfig
+	perfRepo           domain.PerformanceRepository
+	cooldownMgr        *CooldownManager
+	httpClient         *http.Client
+	dynamicModelsCache map[string][]string
+	dynamicModelsMu    sync.RWMutex
 }
 
 func NewClient(cfg ClientConfig) *Client {
 	return &Client{
-		providers:         cfg.Providers,
-		fallbackProviders: cfg.FallbackProviders,
-		perfRepo:          cfg.PerfRepo,
-		cooldownMgr:       NewCooldownManager(),
+		providers:          cfg.Providers,
+		fallbackProviders:  cfg.FallbackProviders,
+		perfRepo:           cfg.PerfRepo,
+		cooldownMgr:        NewCooldownManager(),
 		httpClient: &http.Client{
 			Timeout: 90 * time.Second,
 		},
+		dynamicModelsCache: make(map[string][]string),
 	}
 }
 
@@ -67,6 +72,107 @@ type ChatCompletionResult struct {
 	Message     domain.ChatMessage
 	ModelUsed   string
 	ProviderURL string
+}
+
+type ModelItem struct {
+	ID string `json:"id"`
+}
+
+type ModelsResponse struct {
+	Data []ModelItem `json:"data"`
+}
+
+// FetchModels queries <baseURL>/models to retrieve current available models.
+func (c *Client) FetchModels(ctx context.Context, baseURL, apiKey string) ([]string, error) {
+	cleanURL := strings.TrimRight(baseURL, "/") + "/models"
+
+	reqCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	httpReq, err := http.NewRequestWithContext(reqCtx, http.MethodGet, cleanURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create http request for models: %w", err)
+	}
+
+	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	httpReq.Header.Set("Origin", "https://trae.ai")
+	httpReq.Header.Set("Referer", "https://trae.ai/")
+	httpReq.Header.Set("HTTP-Referer", "https://trae.ai")
+	httpReq.Header.Set("X-Title", "Trae")
+	if strings.Contains(cleanURL, "alwaysdata") || strings.Contains(cleanURL, "agentrouter") {
+		httpReq.Header.Set("Originator", "codex_cli_rs")
+		httpReq.Header.Set("User-Agent", "codex_cli_rs/0.101.0 (Mac OS 26.0.1; arm64) Apple_Terminal/464")
+		httpReq.Header.Set("Version", "0.101.0")
+	} else {
+		httpReq.Header.Set("User-Agent", "Trae/1.0.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	}
+	httpReq.Header.Set("Accept", "application/json, text/plain, */*")
+	httpReq.Header.Set("Accept-Language", "en-US,en;q=0.9")
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("http request error fetching models: %w", err)
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read models response body: %w", err)
+	}
+
+	if resp.StatusCode >= 400 {
+		bodyStr := string(bodyBytes)
+		if len(bodyStr) > 300 {
+			bodyStr = bodyStr[:300] + "..."
+		}
+		return nil, fmt.Errorf("HTTP error %d fetching models: %s", resp.StatusCode, bodyStr)
+	}
+
+	var respObj ModelsResponse
+	if err := json.Unmarshal(bodyBytes, &respObj); err != nil {
+		return nil, fmt.Errorf("failed to parse models json: %w", err)
+	}
+
+	var models []string
+	for _, item := range respObj.Data {
+		trimmed := strings.TrimSpace(item.ID)
+		if trimmed != "" {
+			models = append(models, trimmed)
+		}
+	}
+
+	if len(models) == 0 {
+		return nil, errors.New("no models returned from models endpoint")
+	}
+
+	return models, nil
+}
+
+func (c *Client) resolveProviderModels(ctx context.Context, p ProviderConfig) []string {
+	if !p.DynamicModels {
+		return p.Models
+	}
+
+	models, err := c.FetchModels(ctx, p.BaseURL, p.APIKey)
+	if err == nil && len(models) > 0 {
+		c.dynamicModelsMu.Lock()
+		c.dynamicModelsCache[p.BaseURL] = models
+		c.dynamicModelsMu.Unlock()
+		log.Printf("[AIClient DynamicModels] Fetched %d active models from %s: %v", len(models), p.BaseURL, models)
+		return models
+	}
+
+	log.Printf("[AIClient DynamicModels] Warning: failed to fetch models from %s: %v. Checking cache/fallback.", p.BaseURL, err)
+
+	c.dynamicModelsMu.RLock()
+	cached, ok := c.dynamicModelsCache[p.BaseURL]
+	c.dynamicModelsMu.RUnlock()
+	if ok && len(cached) > 0 {
+		log.Printf("[AIClient DynamicModels] Using %d cached models for %s: %v", len(cached), p.BaseURL, cached)
+		return cached
+	}
+
+	return p.Models
 }
 
 func (c *Client) ChatCompletions(ctx context.Context, messages []domain.ChatMessage, opts ChatCompletionOptions) (*ChatCompletionResult, error) {
@@ -90,7 +196,8 @@ func (c *Client) ChatCompletions(ctx context.Context, messages []domain.ChatMess
 	// 2. Assemble primary candidates strictly using the configured env APIKey
 	var primaryCandidates []ModelCandidate
 	for _, provider := range c.providers {
-		for _, m := range provider.Models {
+		models := c.resolveProviderModels(ctx, provider)
+		for _, m := range models {
 			if opts.ExcludeModel != "" && m == opts.ExcludeModel {
 				continue
 			}
@@ -112,7 +219,8 @@ func (c *Client) ChatCompletions(ctx context.Context, messages []domain.ChatMess
 	if len(c.fallbackProviders) > 0 {
 		var fallbackCandidates []ModelCandidate
 		for _, fb := range c.fallbackProviders {
-			for _, m := range fb.Models {
+			models := c.resolveProviderModels(ctx, fb)
+			for _, m := range models {
 				fallbackCandidates = append(fallbackCandidates, ModelCandidate{
 					Provider: fb,
 					Model:    m,

@@ -37,14 +37,14 @@ key alone:
 > The alternate `Originator` / `codex_cli_rs` User-Agent in the code applies ONLY to the
 > `alwaysdata` / `agentrouter` providers — **not** to Justwoker.
 
-## Available Models
+## Dynamic Models & Fallback
 
-- `claude-opus-4-8`
-- `claude-opus-4-8-thinking`
-- `claude-opus-5`
-- `claude-opus-5-thinking`
+Instead of hardcoding models, the bot discovers models dynamically by calling the `GET /models` endpoint:
 
-> These models also support **vision** (image input) on this provider.
+- Active models are queried directly from `https://api.justwoker.icu/v1/models`
+- Models are evaluated **in sequence order** as returned by the API
+- If a model fails or hits cooldown, the bot seamlessly falls back to the next model in sequence (and subsequently to backup providers)
+- Successfully fetched models are cached in-memory as a safeguard against transient `/models` connectivity hiccups
 
 ## Quick Start
 
@@ -128,14 +128,9 @@ To add or reuse it:
 ```go
 providers := []ai.ProviderConfig{
     {
-        BaseURL: "https://api.justwoker.icu/v1",
-        APIKey:  "sk-d2WlIK9RFjNniWReJ3SulMkSa1bA4Clfecn9wbc0ICB4LqeV",
-        Models: []string{
-            "claude-opus-4-8",
-            "claude-opus-4-8-thinking",
-            "claude-opus-5",
-            "claude-opus-5-thinking",
-        },
+        BaseURL:       "https://api.justwoker.icu/v1",
+        APIKey:        "sk-d2WlIK9RFjNniWReJ3SulMkSa1bA4Clfecn9wbc0ICB4LqeV",
+        DynamicModels: true,
     },
     // ...other providers act as fallbacks in order
 }

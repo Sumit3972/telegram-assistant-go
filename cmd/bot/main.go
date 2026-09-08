@@ -77,15 +77,9 @@ func main() {
 	// 5. Initialize AI Client
 	providers := []ai.ProviderConfig{
 		{
-			BaseURL: "https://api.justwoker.icu/v1",
-			APIKey:  "sk-d2WlIK9RFjNniWReJ3SulMkSa1bA4Clfecn9wbc0ICB4LqeV",
-			Models: []string{
-				"claude-opus-5-thinking",
-				"claude-opus-4-8",
-				"claude-opus-4-8-thinking",
-				"claude-opus-5",
-				
-			},
+			BaseURL:       "https://api.justwoker.icu/v1",
+			APIKey:        "sk-d2WlIK9RFjNniWReJ3SulMkSa1bA4Clfecn9wbc0ICB4LqeV",
+			DynamicModels: true,
 		},
 		{
 			BaseURL: "https://novarouter.site/api/v1",
