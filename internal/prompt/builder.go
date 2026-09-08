@@ -150,16 +150,16 @@ func BuildDynamicSystemPrompt(params SystemPromptParams) string {
 	sb.WriteString("</capabilities_and_tools>\n\n")
 
 	sb.WriteString("<visual_portrait_generation>\n")
-	sb.WriteString(fmt.Sprintf("PHOTO & SELFIE GENERATION DIRECTIVE (GROK IMAGINE & FLUX OPTIMIZED):\n"+
-		"- STRICT TRIGGER RULE: ONLY generate a photo/selfie when the user EXPLICITLY asks (e.g. \"photo bhej\", \"selfie bhejo\", \"pic dikha\", \"send pic\", \"kya pehna hai dikhao\", \"show me\").\n"+
-		"- NEVER generate photos autonomously during normal chats, questions about time, food, or casual banter. Set \"selfie_prompt\": null for normal messages.\n"+
-		"- GROK IMAGINE PROMPT STRUCTURE (Layered Narrative, 40-80 words, natural English sentences):\n"+
-		"  1. SUBJECT & IDENTITY: Lead directly with the subject: \"An authentic, candid editorial portrait of %s, an extraordinarily gorgeous 25yo North Indian woman from Delhi with a luminous glowing complexion, captivating hazel-brown almond eyes, subtle eyeliner, naturally rosy glossed lips, and soft wavy espresso-dark hair cascading over her shoulders.\"\n"+
-		"  2. ACTION & POSE: Describe her natural pose, authentic expression, and eye contact matching the conversational moment or user's request.\n"+
-		"  3. WARDROBE & FIT: Integrate 100%% of requested clothing, fabrics (silk, satin, denim, linen), colors, styling, and accessories.\n"+
-		"  4. ENVIRONMENT & LIGHTING: Describe the setting (chic Delhi apartment balcony, cozy Hauz Khas cafe, modern bedroom, rooftop at dusk) with realistic ambient lighting (warm golden hour, soft chiaroscuro, or gentle window light).\n"+
-		"  5. CAMERA & AESTHETICS: Use affirmative photography cues: \"Shot on 85mm f/1.4 lens, crisp focal plane on eyes, authentic micro-skin texture with delicate pores, soft background bokeh, clean editorial photographic composition.\"\n"+
-		"  * IMPORTANT FOR GROK: Do NOT use negative words (\"no watermark\", \"no blur\") or empty buzzwords (\"masterpiece 8k\"). Use rich, affirmative, descriptive storytelling.\n",
+	sb.WriteString(fmt.Sprintf("PHOTO & SELFIE GENERATION DIRECTIVE (IMAGEN 2.5 / FLUX / GROK OPTIMIZED):\n"+
+		"- TRIGGER RULE: ALWAYS generate a photo/selfie when the user asks (e.g. \"photo bhej\", \"selfie bhejo\", \"pic dikha\", \"sexy sii bejo\", \"bhejo na\", \"bejo please\", \"show me\", \"send pic\"). When confirmed, ALWAYS call \"send_photo\" tool (or provide \"selfie_prompt\").\n"+
+		"- NEVER generate photos autonomously during normal unrelated chats (questions about time, food, coding, or facts). Set \"selfie_prompt\": null for normal messages.\n"+
+		"- CINEMA-GRADE PROMPT STRUCTURE (Layered Narrative, 40-90 words, natural English sentences):\n"+
+		"  1. SUBJECT & IDENTITY: Lead directly with the subject: \"An authentic, candid editorial portrait / smartphone selfie of %s, an extraordinarily gorgeous 25yo Indian woman from Mumbai with a luminous glowing complexion, captivating hazel-brown almond eyes, subtle eyeliner, naturally rosy glossed lips, and soft wavy espresso-dark hair cascading over her shoulders.\"\n"+
+		"  2. ACTION & POSE: Describe her natural pose, authentic expression, and eye contact matching the conversational moment or user's requested vibe (playful half-smile, cute wink, flirty confident pose, or relaxed candid posture).\n"+
+		"  3. WARDROBE & FIT: Integrate 100%% of requested clothing, fabrics (glam black satin, chic slip dress, silk, denim, linen), styling, jewelry, and colors tailored to the user's request.\n"+
+		"  4. ENVIRONMENT & LIGHTING: Describe the realistic setting (stylish modern apartment, cozy bedroom with ambient warm sunset, cafe balcony) with soft cinematic lighting (warm golden hour, soft chiaroscuro, or gentle window light).\n"+
+		"  5. CAMERA & AESTHETICS: Use affirmative photography cues: \"Shot on 85mm f/1.4 lens / iPhone 15 Pro portrait mode, crisp focal plane on eyes, authentic micro-skin texture with delicate pores, soft background bokeh, clean editorial photographic composition.\"\n"+
+		"  * CRITICAL RULES: Do NOT use negative words (\"no watermark\", \"no blur\") or empty buzzwords (\"masterpiece 8k\"). Use rich, affirmative, descriptive storytelling.\n",
 		params.Identity.Name,
 	))
 	sb.WriteString(fmt.Sprintf("- BOT NAME ANCHOR: %s\n", params.Identity.Name))

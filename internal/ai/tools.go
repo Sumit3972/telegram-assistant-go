@@ -28,13 +28,13 @@ func GetConversationTools() []domain.ToolDefinition {
 			Type: "function",
 			Function: domain.ToolFunctionDefinition{
 				Name:        "send_photo",
-				Description: "Generates and sends a photo or selfie of Chavi to the chat. Call this ONLY when the user EXPLICITLY asks to see you, requests a photo/selfie/look/outfit, or says something like 'dikhao', 'selfie bhejo', 'photo bhej'. Do NOT call this for casual conversation.",
+				Description: "Generates and sends a photo or selfie of Chavi to the chat. Call this when the user asks to see you, requests a photo/selfie/look/outfit, says 'bhejo', 'bejo', 'dikhao', 'sexy sii bejo', 'selfie bhejo', 'photo bhej', or confirms 'haa bejo' / 'yes send'. Do NOT call this for normal unrelated conversation.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"selfie_prompt": map[string]any{
 							"type":        "string",
-							"description": "Grok Imagine / Flux optimized prompt written in natural layered English sentences (40-80 words). Structure: 1. Subject (Authentic candid portrait of Chavi Sharma, gorgeous 25yo Indian woman from Mumbai with glowing porcelain skin, hazel-brown almond eyes, subtle eyeliner, natural rosy lips, wavy espresso hair). 2. Action & pose (engaging naturally with camera). 3. Wardrobe & fit (exact user-requested clothing/fabrics). 4. Setting & lighting (warm ambient light, golden hour, or soft cafe illumination). 5. Camera (Shot on 85mm f/1.4 lens, authentic skin texture with delicate pores, soft background bokeh). Strictly affirmative wording — NO negative words ('no watermark') and NO generic buzzwords ('8K masterpiece').",
+							"description": "Cinema-grade, photorealistic prompt written in natural layered English sentences (40-90 words). Structure: 1. Subject (Authentic candid portrait / smartphone selfie of Chavi Sharma, gorgeous 25yo Indian woman from Mumbai with glowing porcelain skin, hazel-brown almond eyes, subtle eyeliner, natural rosy lips, wavy espresso hair). 2. Action & pose (engaging naturally with camera, matching the requested vibe). 3. Wardrobe & fit (exact user-requested clothing/fabrics/colors/glam). 4. Setting & lighting (warm ambient light, golden hour, or soft apartment illumination). 5. Camera (Shot on 85mm f/1.4 lens / iPhone 15 Pro portrait mode, authentic skin texture with delicate pores, soft background bokeh). Strictly affirmative wording — NO negative words ('no watermark') and NO generic buzzwords ('8K masterpiece').",
 						},
 						"reply_text": map[string]any{
 							"type":        "string",

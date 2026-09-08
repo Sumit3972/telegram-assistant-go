@@ -9,7 +9,7 @@ var SelfieKeywords = []string{
 	"photo", "selfie", "pic", "pics", "picture", "pictures", "image", "img", "face reveal", "dp",
 	"dikha", "dikhao", "show", "shakal", "chehra", "sakhal", "look", "photu", "footo", "futo",
 	"foto", "snap", "portrait", "camera", "visual", "look like", "teri photo", "apni photo",
-	"teri pic", "apni pic", "view",
+	"teri pic", "apni pic", "view", "bhejo", "bejo", "bhej", "bhejna", "sexy", "hot", "glam",
 }
 
 var ExplicitPhotoKeywords = []string{
@@ -31,6 +31,8 @@ var ExplicitPhotoKeywords = []string{
 	"seductive photo", "seductive pic", "seductive selfie",
 	"cleavage", "hourglass", "curves", "fit",
 	"image bhej", "image dikha", "send image", "show image", "ek image", "photo do", "selfie do", "pic do", "image do",
+	"bejo", "bhejo", "bhej de", "bhej do", "bejo na", "bhejo na", "bejo naa", "bhejo naa", "bejo please", "bhejo please",
+	"sexy sii", "sexy si", "glam wali", "hot si", "hot sii",
 }
 
 var DefaultSelfiePrompts = []string{

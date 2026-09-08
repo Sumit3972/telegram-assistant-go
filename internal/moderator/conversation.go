@@ -387,7 +387,7 @@ func (h *ConversationHandler) executeToolCall(
 	case "send_photo":
 		selfiePrompt, _ := args["selfie_prompt"].(string)
 		replyText, _ := args["reply_text"].(string)
-		go h.generateAndSendPhoto(context.Background(), msg, selfiePrompt, replyText)
+		go h.generateAndSendPhoto(context.Background(), msg, selfiePrompt, replyText, true)
 
 	case "play_music", "skip_music", "pause_music", "resume_music", "stop_music":
 		songName, _ := args["song_name"].(string)
@@ -407,21 +407,49 @@ func (h *ConversationHandler) executeToolCall(
 }
 
 func isExplicitPhotoRequest(text string) bool {
-	lower := strings.ToLower(text)
+	lower := strings.ToLower(strings.TrimSpace(text))
+	if lower == "" {
+		return false
+	}
+
+	// Negative requests should never trigger photos
+	negatives := []string{"no photo", "mat bhej", "mat bejo", "don't send", "dont send", "no pic", "photo nahi", "pic nahi"}
+	for _, neg := range negatives {
+		if strings.Contains(lower, neg) {
+			return false
+		}
+	}
+
 	keywords := []string{
-		"photo", "selfie", "pic", "picture", "image", "dikha", "dikhao", "dikhana",
-		"shakal", "tasveer", "dp", "outfit", "look", "pehna", "pehan", "dress",
-		"kaisi lag rahi ho", "kaisi dikhti ho", "kaisi dikh rahi ho", "show me", "send me",
+		// Direct photo terms
+		"photo", "selfie", "pic", "pics", "picture", "pictures", "image", "img", "photu", "footo", "tasveer", "tasvir", "dp", "avatar", "shakal", "chehra", "face", "pose",
+		// Direct send/bhej terms (crucial for Hinglish/Hindi)
+		"bhejo", "bejo", "bhej", "bhejna", "bhejiye", "bhej de", "bhej do", "bhejona", "bejona", "bhej na", "bejo na", "bhejo naa", "bejo naa",
+		"bhejega", "bhejegi", "bhejoge", "bhejogi", "send", "share", "drop",
+		// Show / look terms
+		"dikha", "dikhao", "dikhana", "dikhaye", "dikhayi", "dikhayiye", "dikhao na", "dekhna", "dekhu", "dekh", "dekhe", "show me", "send me",
+		// Appearance / outfit / sexy / glam terms
+		"sexy", "hot", "glam", "sundar", "cute", "gorgeous", "nude", "nudes", "outfit", "look", "pehna", "pehan", "dress", "saree", "kurti", "top", "clothes", "kapde", "kapda",
+		"kaisi lag rahi ho", "kaisi dikhti ho", "kaisi dikh rahi ho",
+		// Confirmations / affirmations
+		"haa bejo", "haa bhejo", "ha bejo", "ha bhejo", "haan bejo", "haan bhejo", "yes send", "send please", "bejo please", "bhejo please",
+		"haa please", "ha please", "haan please", "yes please", "haa kar do", "ha kar do",
 	}
 	for _, kw := range keywords {
 		if strings.Contains(lower, kw) {
 			return true
 		}
 	}
+
+	// Also check prompt package's keywords
+	if prompt.IsSelfieRequested(lower) {
+		return true
+	}
+
 	return false
 }
 
-func (h *ConversationHandler) generateAndSendPhoto(ctx context.Context, msg *domain.TelegramMessage, rawPrompt, replyText string) {
+func (h *ConversationHandler) generateAndSendPhoto(ctx context.Context, msg *domain.TelegramMessage, rawPrompt, replyText string, isToolCall ...bool) {
 	cleanPrompt := strings.TrimSpace(rawPrompt)
 	if cleanPrompt == "" || strings.EqualFold(cleanPrompt, "null") || strings.EqualFold(cleanPrompt, "none") {
 		if replyText != "" {
@@ -434,7 +462,9 @@ func (h *ConversationHandler) generateAndSendPhoto(ctx context.Context, msg *dom
 	if userMsgText == "" {
 		userMsgText = msg.Caption
 	}
-	if !isExplicitPhotoRequest(userMsgText) {
+
+	fromTool := len(isToolCall) > 0 && isToolCall[0]
+	if !fromTool && !isExplicitPhotoRequest(userMsgText) {
 		log.Printf("[Conversation] Suppressed unsolicited photo generation for message: %q. Sending text reply instead.", userMsgText)
 		if replyText != "" {
 			h.sendMessage(ctx, msg, replyText)
