@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"telegram-ai-assistant/internal/ai"
+	"telegram-ai-assistant/internal/ai/antigravity"
 	"telegram-ai-assistant/internal/config"
 	"telegram-ai-assistant/internal/database"
 	"telegram-ai-assistant/internal/domain"
@@ -74,43 +75,23 @@ func main() {
 		log.Printf("⚠️ API key seeding warning: %v", err)
 	}
 
-	// 5. Initialize AI Client
+	// 5. Initialize Native Google Antigravity Client (Gemini 3.8 Flash, Claude 4.6, Imagen 3)
+	agyClient := antigravity.NewClient(antigravity.Config{
+		RefreshToken:  cfg.AntigravityRefreshToken,
+		Email:         cfg.AntigravityEmail,
+		AccountsPath:  "accounts.json",
+		AccountsFiles: []string{"1.json", "2.json"},
+	})
+	log.Printf("🚀 [Antigravity Engine] Initialized with %d account(s) ready for Gemini 3.8, Claude 4.6 & Imagen 3", agyClient.AccountCount())
+
+	// Asynchronously inspect and log live quotas for all accounts
+	go func() {
+		qCtx, qCancel := context.WithTimeout(context.Background(), 25*time.Second)
+		defer qCancel()
+		agyClient.SyncAllQuotas(qCtx)
+	}()
+
 	providers := []ai.ProviderConfig{
-		{
-			BaseURL:       "https://api.justwoker.icu/v1",
-			APIKey:        "sk-d2WlIK9RFjNniWReJ3SulMkSa1bA4Clfecn9wbc0ICB4LqeV",
-			DynamicModels: true,
-			UseAnthropic:  true,
-		},
-		{
-			BaseURL: "https://novarouter.site/api/v1",
-			APIKey:  "nr_sk_JBswU_kp6fKPGtuDpKZGoqUUBags",
-			Models: []string{
-				"deepseek-v4",
-				"glm-5.2",
-				"kimi-k3",
-				"gpt-5.6-sol",
-				"grok-4.5",
-			},
-		},
-		{
-			BaseURL: "https://gorouter.app/v1",
-			APIKey:  "sk-LlJ8vC0ociQnotHY5gFw3K6onFmXlmFSNUJs8uGOmzLPxqpM",
-			Models: []string{
-				"claude-opus-4-8",
-			},
-		},
-		{
-			BaseURL: "https://novarouter.site/api/v1",
-			APIKey:  "nr_sk_JBswU_kp6fKPGtuDpKZGoqUUBags",
-			Models: []string{
-				"gemini-3.6-flash",
-				"gemini-3-pro",
-				"claude-fable-5",
-				"claude-opus-5",
-				"claude-sonnet-5",
-			},
-		},
 		{
 			BaseURL: cfg.AIBaseURL,
 			APIKey:  cfg.AIAPIKey,
@@ -123,8 +104,9 @@ func main() {
 	}
 
 	aiClient := ai.NewClient(ai.ClientConfig{
-		Providers: providers,
-		PerfRepo:  perfRepo,
+		Antigravity: agyClient,
+		Providers:   providers,
+		PerfRepo:    perfRepo,
 	})
 
 	// 6. Initialize Telegram Bot API Client

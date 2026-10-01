@@ -69,6 +69,9 @@ func NewModerator(
 		imageKey = cfg.AIAPIKey
 	}
 	imgService := media.NewImageService(cfg.GeminiImageAPIURL, imageKey, cfg.ImageModel)
+	if agy := aiClient.GetAntigravity(); agy != nil && agy.IsConfigured() {
+		imgService.SetAntigravityClient(agy)
+	}
 	voiceService := media.NewVoiceService(cfg.FishAudioAPIKey)
 	searchService := media.NewSearchService(cfg.TavilyAPIKey)
 	musicService := media.NewMusicService(cfg.MusicBotURL, cfg.MusicBotSecret)
@@ -102,7 +105,7 @@ func NewModerator(
 		convHandler: NewConversationHandler(
 			aiClient, imgService, voiceService, searchService, musicService,
 			historyRepo, relRepo, groupRepo, adminRepo, warningRepo, modLogRepo,
-			botClient, cfg.MyPersonalName, cfg.MyPersonalUsername, cfg.AIAPIKey,
+			botClient, cfg.MyPersonalName, cfg.MyPersonalUsername, cfg.AIAPIKey, cfg.CodivAPIKey,
 		),
 		bootTime: time.Now().Add(-30 * time.Second).Unix(),
 	}

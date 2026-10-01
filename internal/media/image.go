@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"telegram-ai-assistant/internal/ai/antigravity"
 )
 
 type ImageService struct {
@@ -18,6 +20,7 @@ type ImageService struct {
 	apiKey       string
 	primaryModel string
 	httpClient   *http.Client
+	antigravity  *antigravity.Client
 }
 
 func NewImageService(apiURL, apiKey string, primaryModel ...string) *ImageService {
@@ -34,6 +37,10 @@ func NewImageService(apiURL, apiKey string, primaryModel ...string) *ImageServic
 		primaryModel: model,
 		httpClient:   &http.Client{Timeout: 300 * time.Second},
 	}
+}
+
+func (s *ImageService) SetAntigravityClient(agy *antigravity.Client) {
+	s.antigravity = agy
 }
 
 type GeneratedImage struct {
@@ -105,6 +112,20 @@ func replaceCaseInsensitive(str, substr, repl string) string {
 }
 
 func (s *ImageService) GenerateImage(ctx context.Context, prompt string) (*GeneratedImage, error) {
+	// 1. Try Antigravity Imagen 3 first if configured
+	if s.antigravity != nil && s.antigravity.IsConfigured() {
+		log.Printf("[ImageService] Attempting generation with Antigravity Imagen 3 (gemini-3.1-flash-image)...")
+		imgBytes, err := s.antigravity.GenerateImage(ctx, prompt)
+		if err == nil && len(imgBytes) > 0 {
+			log.Printf("[ImageService] Successfully generated %d byte JPEG via Antigravity Imagen 3!", len(imgBytes))
+			return &GeneratedImage{
+				Data:        imgBytes,
+				ContentType: "image/jpeg",
+			}, nil
+		}
+		log.Printf("[ImageService] Antigravity Imagen 3 failed: %v. Falling back to candidate pool...", err)
+	}
+
 	primary := s.primaryModel
 	if primary == "" {
 		primary = "agnes-image-2.5-flash"

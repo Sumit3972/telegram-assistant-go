@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"telegram-ai-assistant/internal/ai"
+	"telegram-ai-assistant/internal/decision"
 	"telegram-ai-assistant/internal/domain"
 	"telegram-ai-assistant/internal/media"
 	"telegram-ai-assistant/internal/prompt"
@@ -18,22 +19,23 @@ import (
 )
 
 type ConversationHandler struct {
-	aiClient      *ai.Client
-	imageService  *media.ImageService
-	voiceService  *media.VoiceService
-	searchService *media.SearchService
-	musicService  *media.MusicService
-	historyRepo   domain.HistoryRepository
-	relRepo       domain.RelationshipRepository
-	groupRepo     domain.GroupRepository
-	adminRepo     domain.AdminRepository
-	warningRepo   domain.WarningRepository
-	modLogRepo    domain.ModerationLogRepository
-	botClient     *telegram.BotClient
-	userbotSender domain.UserbotSender
-	botName       string
-	botUsername   string
-	fallbackKey   string
+	aiClient       *ai.Client
+	decisionClient *decision.Client
+	imageService   *media.ImageService
+	voiceService   *media.VoiceService
+	searchService  *media.SearchService
+	musicService   *media.MusicService
+	historyRepo    domain.HistoryRepository
+	relRepo        domain.RelationshipRepository
+	groupRepo      domain.GroupRepository
+	adminRepo      domain.AdminRepository
+	warningRepo    domain.WarningRepository
+	modLogRepo     domain.ModerationLogRepository
+	botClient      *telegram.BotClient
+	userbotSender  domain.UserbotSender
+	botName        string
+	botUsername    string
+	fallbackKey    string
 }
 
 func (h *ConversationHandler) SetUserbotSender(s domain.UserbotSender) {
@@ -53,11 +55,12 @@ func NewConversationHandler(
 	warningRepo domain.WarningRepository,
 	modLogRepo domain.ModerationLogRepository,
 	botClient *telegram.BotClient,
-	botName, botUsername, fallbackKey string,
+	botName, botUsername, fallbackKey, codivKey string,
 ) *ConversationHandler {
 	return &ConversationHandler{
-		aiClient:      aiClient,
-		imageService:  imageService,
+		aiClient:       aiClient,
+		decisionClient: decision.NewClient(codivKey),
+		imageService:   imageService,
 		voiceService:  voiceService,
 		searchService: searchService,
 		musicService:  musicService,
@@ -115,7 +118,20 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 	// 3. Get recent history (used directly for multi-turn ChatMessage array)
 	recent, _ := h.historyRepo.GetRecentMessages(ctx, chatIDStr, 20)
 
-	// 4. Build System Prompt (history is passed as ChatMessage turns to prevent duplicate token consumption)
+	// 4. Evaluate Content Tier using OpenJev Decision Engine
+	tier := "normal"
+	intensity := 0
+	if h.decisionClient != nil && text != "" {
+		if cls, err := h.decisionClient.ClassifyMessage(ctx, text); err == nil {
+			tier = cls.Tier
+			intensity = cls.Intensity
+			if tier != "normal" {
+				log.Printf("[Conversation] 🔥 OpenJev classified message: user=@%s tier=%s (intensity=%d, conf=%.2f)", username, tier, intensity, cls.Confidence)
+			}
+		}
+	}
+
+	// 5. Build System Prompt with Tier and Intensity
 	sysPrompt := prompt.BuildDynamicSystemPrompt(prompt.SystemPromptParams{
 		Identity: prompt.IdentityParams{
 			Name:     h.botName,
@@ -130,6 +146,8 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 		UserText:       text,
 		WithHistory:    false,
 		HistoryContext: "",
+		ContentTier:    tier,
+		Intensity:      intensity,
 	})
 
 	// 5. Extract image/photo if present in current message or replied message for Vision AI

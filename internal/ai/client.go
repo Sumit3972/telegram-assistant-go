@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"telegram-ai-assistant/internal/ai/antigravity"
 	"telegram-ai-assistant/internal/domain"
 )
 
@@ -28,6 +29,7 @@ type ClientConfig struct {
 	Providers         []ProviderConfig
 	FallbackProviders []ProviderConfig
 	PerfRepo          domain.PerformanceRepository
+	Antigravity       *antigravity.Client
 }
 
 type ModelCandidate struct {
@@ -36,6 +38,7 @@ type ModelCandidate struct {
 }
 
 type Client struct {
+	antigravity        *antigravity.Client
 	providers          []ProviderConfig
 	fallbackProviders  []ProviderConfig
 	perfRepo           domain.PerformanceRepository
@@ -47,6 +50,7 @@ type Client struct {
 
 func NewClient(cfg ClientConfig) *Client {
 	return &Client{
+		antigravity:        cfg.Antigravity,
 		providers:          cfg.Providers,
 		fallbackProviders:  cfg.FallbackProviders,
 		perfRepo:           cfg.PerfRepo,
@@ -177,6 +181,24 @@ func (c *Client) resolveProviderModels(ctx context.Context, p ProviderConfig) []
 }
 
 func (c *Client) ChatCompletions(ctx context.Context, messages []domain.ChatMessage, opts ChatCompletionOptions) (*ChatCompletionResult, error) {
+	// 0. Antigravity native execution if configured (Primary Engine)
+	if c.antigravity != nil && c.antigravity.IsConfigured() && opts.ForceProviderURL == "" {
+		agyOpts := antigravity.ChatOptions{
+			Model:       opts.ForceModel,
+			Temperature: opts.Temperature,
+			MaxTokens:   opts.MaxTokens,
+		}
+		msg, modelUsed, err := c.antigravity.Complete(ctx, messages, agyOpts)
+		if err == nil {
+			return &ChatCompletionResult{
+				Message:     *msg,
+				ModelUsed:   modelUsed,
+				ProviderURL: "google-antigravity",
+			}, nil
+		}
+		log.Printf("[AIClient] Antigravity failed: %v. Falling back to candidate pool...", err)
+	}
+
 	// 1. Forced provider/model check
 	if opts.ForceProviderURL != "" && opts.ForceModel != "" {
 		for _, p := range append(c.providers, c.fallbackProviders...) {
@@ -651,3 +673,8 @@ func (c *Client) requestAnthropic(
 		ToolCalls: toolCalls,
 	}, nil
 }
+
+func (c *Client) GetAntigravity() *antigravity.Client {
+	return c.antigravity
+}
+
