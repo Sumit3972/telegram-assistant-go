@@ -33,10 +33,13 @@ const (
 
 	BaseURLDaily = "https://daily-cloudcode-pa.googleapis.com/v1internal"
 
-	ModelGemini38Flash = "gemini-3.8-flash-high"
-	ModelClaudeSonnet  = "claude-sonnet-4-6"
-	ModelClaudeOpus    = "claude-opus-4-6-thinking"
-	ModelImagen3       = "gemini-3.1-flash-image"
+	ModelGemini38Flash     = "gemini-3.8-flash-high"
+	ModelGemini37Flash     = "gemini-3.7-flash"
+	ModelGemini37FlashHigh = "gemini-3.7-flash-high"
+	ModelGemini36Flash     = "gemini-3.6-flash"
+	ModelClaudeSonnet      = "claude-sonnet-4-6"
+	ModelClaudeOpus        = "claude-opus-4-6-thinking"
+	ModelImagen3           = "gemini-3.1-flash-image"
 )
 
 type AccountRecord struct {
@@ -283,16 +286,26 @@ func (c *Client) AccountCount() int {
 	return len(c.accounts)
 }
 
+func isModelCapacityError(statusCode int, bodyStr string) bool {
+	if statusCode == 503 {
+		return true
+	}
+	s := strings.ToUpper(bodyStr)
+	return strings.Contains(s, "MODEL_CAPACITY_EXHAUSTED") ||
+		strings.Contains(s, "NO CAPACITY AVAILABLE") ||
+		strings.Contains(s, "CAPACITY_EXHAUSTED") ||
+		strings.Contains(s, "UNAVAILABLE") ||
+		strings.Contains(s, "OVERLOADED")
+}
+
 func isQuotaOrRateLimitError(statusCode int, bodyStr string) bool {
-	if statusCode == 429 || statusCode == 503 {
+	if statusCode == 429 {
 		return true
 	}
 	s := strings.ToUpper(bodyStr)
 	return strings.Contains(s, "RESOURCE_EXHAUSTED") ||
 		strings.Contains(s, "QUOTA") ||
 		strings.Contains(s, "RATE_LIMIT") ||
-		strings.Contains(s, "CAPACITY") ||
-		strings.Contains(s, "OVERLOADED") ||
 		strings.Contains(s, "EXHAUSTED")
 }
 
@@ -566,6 +579,45 @@ type ChatOptions struct {
 	MaxTokens   *int
 }
 
+func (c *Client) buildModelHierarchy(requested string) []string {
+	reqLower := strings.ToLower(requested)
+	var list []string
+
+	if strings.Contains(reqLower, "claude") {
+		list = []string{
+			ModelClaudeSonnet,
+			ModelClaudeOpus,
+			ModelGemini38Flash,
+			ModelGemini37Flash,
+			ModelGemini36Flash,
+		}
+	} else {
+		if requested != "" {
+			list = append(list, requested)
+		}
+		// Primary fast conversational default
+		list = append(list, ModelGemini38Flash)
+		// Fallbacks: 3.7, 3.6, and Claude reasoning fallback
+		list = append(list,
+			ModelGemini37Flash,
+			ModelGemini37FlashHigh,
+			ModelGemini36Flash,
+			ModelClaudeSonnet,
+		)
+	}
+
+	seen := make(map[string]bool)
+	var models []string
+	for _, m := range list {
+		clean := strings.TrimSpace(m)
+		if clean != "" && !seen[clean] {
+			seen[clean] = true
+			models = append(models, clean)
+		}
+	}
+	return models
+}
+
 // Complete generates chat completions with prioritized multi-account rotation and failover.
 func (c *Client) Complete(
 	ctx context.Context,
@@ -576,17 +628,7 @@ func (c *Client) Complete(
 		return nil, "", errors.New("no antigravity accounts configured")
 	}
 
-	// Model hierarchy:
-	// Fast conversational default = gemini-3.8-flash-high
-	// Reasoning / fallback = claude-sonnet-4-6 (100% quota)
-	modelsToTry := []string{ModelGemini38Flash, ModelClaudeSonnet, "gemini-3.7-flash-high"}
-	if opts.Model != "" {
-		if strings.Contains(strings.ToLower(opts.Model), "claude") {
-			modelsToTry = []string{ModelClaudeSonnet, ModelGemini38Flash}
-		} else {
-			modelsToTry = []string{opts.Model, ModelClaudeSonnet, ModelGemini38Flash}
-		}
-	}
+	modelsToTry := c.buildModelHierarchy(opts.Model)
 
 	// Format messages
 	var systemParts []map[string]any
@@ -648,29 +690,38 @@ func (c *Client) Complete(
 
 	var lastErr error
 
-	// Model outer loop: try primary model across healthy accounts first
-	for _, model := range modelsToTry {
-		taskType := "gemini"
-		if strings.Contains(model, "claude") {
-			taskType = "claude"
-		}
+	taskType := "gemini"
+	if strings.Contains(strings.ToLower(opts.Model), "claude") {
+		taskType = "claude"
+	}
 
-		accounts := c.getAccountsForTask(taskType)
-		if len(accounts) == 0 {
+	accounts := c.getAccountsForTask(taskType)
+	if len(accounts) == 0 {
+		return nil, "", errors.New("no antigravity accounts available")
+	}
+
+	// Account outer loop: try each account
+	// Model inner loop: try fallback models (3.8 -> 3.7 -> 3.6 -> claude) on the SAME account before changing accounts
+	for accIdx, acc := range accounts {
+		token, err := c.getAccessTokenFor(ctx, acc)
+		if err != nil {
+			log.Printf("[Antigravity] ⚠️ Auth error for %s: %v. Putting on 15m cooldown...", acc.Email, err)
+			acc.PutOnCooldown("auth", 15*time.Minute)
+			lastErr = err
 			continue
 		}
 
-		for accIdx, acc := range accounts {
-			token, err := c.getAccessTokenFor(ctx, acc)
-			if err != nil {
-				log.Printf("[Antigravity] ⚠️ Auth error for %s: %v. Putting on 15m cooldown...", acc.Email, err)
-				acc.PutOnCooldown("auth", 15*time.Minute)
-				lastErr = err
+		projectID := c.getProjectIDFor(ctx, acc, token)
+
+		accountSuccess := false
+		for modelIdx, model := range modelsToTry {
+			// Skip Claude on this account if claude is specifically on cooldown
+			if strings.Contains(model, "claude") && acc.IsOnCooldown("claude") {
 				continue
 			}
 
-			projectID := c.getProjectIDFor(ctx, acc, token)
-			log.Printf("[Antigravity] Attempting model %s via account %s (%d/%d)...", model, acc.Email, accIdx+1, len(accounts))
+			log.Printf("[Antigravity] Attempting model %s on account %s (%d/%d accounts, model %d/%d)...",
+				model, acc.Email, accIdx+1, len(accounts), modelIdx+1, len(modelsToTry))
 
 			reqBody := map[string]any{
 				"project":   projectID,
@@ -723,7 +774,7 @@ func (c *Client) Complete(
 			resp, err := c.httpClient.Do(httpReq)
 			if err != nil {
 				lastErr = err
-				log.Printf("[Antigravity] Network error (%s, %s): %v", acc.Email, model, err)
+				log.Printf("[Antigravity] Network error (%s, %s): %v. Trying next model on same account...", acc.Email, model, err)
 				continue
 			}
 
@@ -734,16 +785,27 @@ func (c *Client) Complete(
 				lastErr = fmt.Errorf("HTTP %d: %s", resp.StatusCode, errStr)
 				log.Printf("[Antigravity] Model %s failed on %s: %v", model, acc.Email, lastErr)
 
-				if isQuotaOrRateLimitError(resp.StatusCode, errStr) {
-					log.Printf("[Antigravity] ⚠️ Quota ended or rate limit on account %s for %s! Marking on cooldown for 5m. Seamlessly failing over to next account (1.json / 2.json)...", acc.Email, model)
-					acc.PutOnCooldown(taskType, 5*time.Minute)
-				} else if isAuthError(resp.StatusCode, errStr) {
-					log.Printf("[Antigravity] ⚠️ Auth token rejected on account %s. Putting on 15m cooldown...", acc.Email)
+				if isAuthError(resp.StatusCode, errStr) {
+					log.Printf("[Antigravity] ⚠️ Auth token rejected on account %s. Putting on 15m cooldown and changing account...", acc.Email)
 					acc.PutOnCooldown("auth", 15*time.Minute)
-				} else if isSafetyBlockedError(resp.StatusCode, errStr) {
-					log.Printf("[Antigravity] 🛡️ Model %s triggered safety block on %s. Failing over to next model in chain...", model, acc.Email)
-					break
+					break // Token is broken, skip remaining models on this account
 				}
+
+				if isModelCapacityError(resp.StatusCode, errStr) {
+					log.Printf("[Antigravity] ⚠️ Model %s capacity exhausted on account %s (503). Retrying with other models (3.7 / 3.6 / claude) on SAME account...", model, acc.Email)
+					continue // Seamlessly try next fallback model on THIS account!
+				}
+
+				if isQuotaOrRateLimitError(resp.StatusCode, errStr) {
+					log.Printf("[Antigravity] ⚠️ Quota ended or rate limit for %s on account %s. Trying fallback model on SAME account...", model, acc.Email)
+					continue // Seamlessly try next fallback model on THIS account!
+				}
+
+				if isSafetyBlockedError(resp.StatusCode, errStr) {
+					log.Printf("[Antigravity] 🛡️ Model %s triggered safety block on %s. Trying next model on SAME account...", model, acc.Email)
+					continue
+				}
+
 				continue
 			}
 
@@ -791,6 +853,7 @@ func (c *Client) Complete(
 
 			resStr := fullText.String()
 			if strings.TrimSpace(resStr) != "" {
+				accountSuccess = true
 				return &domain.ChatMessage{
 					Role:    "assistant",
 					Content: resStr,
@@ -798,6 +861,11 @@ func (c *Client) Complete(
 			}
 
 			lastErr = errors.New("empty text response from stream")
+		}
+
+		if !accountSuccess {
+			log.Printf("[Antigravity] ⚠️ All fallback models exhausted on account %s. Marking on 3m cooldown and seamlessly changing to next account (1.json / 2.json)...", acc.Email)
+			acc.PutOnCooldown("gemini", 3*time.Minute)
 		}
 	}
 
