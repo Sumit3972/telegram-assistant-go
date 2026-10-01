@@ -146,7 +146,7 @@ func main() {
 	}
 
 	// 10. Start HTTP Server
-	srv := server.NewServer(cfg, botClient, workerPool)
+	srv := server.NewServer(cfg, botClient, workerPool, dbPool)
 
 	go func() {
 		log.Printf("🚀 HTTP Server listening on port %d...", cfg.Port)

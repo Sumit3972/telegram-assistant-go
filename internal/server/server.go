@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"telegram-ai-assistant/internal/config"
 	"telegram-ai-assistant/internal/telegram"
 )
@@ -20,8 +21,12 @@ type Server struct {
 	httpServer *http.Server
 }
 
-func NewServer(cfg *config.Config, botClient *telegram.BotClient, workerPool *WorkerPool) *Server {
-	handlers := NewHandlers(cfg, botClient, workerPool)
+func NewServer(cfg *config.Config, botClient *telegram.BotClient, workerPool *WorkerPool, dbPool ...*pgxpool.Pool) *Server {
+	var pool *pgxpool.Pool
+	if len(dbPool) > 0 {
+		pool = dbPool[0]
+	}
+	handlers := NewHandlers(cfg, botClient, workerPool, pool)
 	r := chi.NewRouter()
 
 	// Middlewares
@@ -48,6 +53,8 @@ func NewServer(cfg *config.Config, botClient *telegram.BotClient, workerPool *Wo
 	r.Get("/", handlers.Health)
 	r.Get("/health", handlers.Health)
 	r.Get("/healthz", handlers.Health)
+	r.Get("/wakeup", handlers.Health)
+	r.Post("/wakeup", handlers.Health)
 	r.Get("/ping", handlers.Ping)
 	r.Get("/admin/upgrade-plan", handlers.UpgradePlan)
 	r.Post("/admin/upgrade-plan", handlers.UpgradePlan)
