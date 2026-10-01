@@ -77,11 +77,13 @@ func main() {
 
 	// 5. Initialize Native Google Antigravity Client (Gemini 3.8 Flash, Claude 4.6, Imagen 3)
 	agyClient := antigravity.NewClient(antigravity.Config{
+		AccountsJSON:  cfg.AntigravityAccounts,
 		RefreshToken:  cfg.AntigravityRefreshToken,
 		Email:         cfg.AntigravityEmail,
 		AccountsPath:  "accounts.json",
 		AccountsFiles: []string{"1.json", "2.json"},
 	})
+
 	log.Printf("🚀 [Antigravity Engine] Initialized with %d account(s) ready for Gemini 3.8, Claude 4.6 & Imagen 3", agyClient.AccountCount())
 
 	// Asynchronously inspect and log live quotas for all accounts

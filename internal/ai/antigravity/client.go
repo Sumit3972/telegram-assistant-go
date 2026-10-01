@@ -111,10 +111,49 @@ type Client struct {
 }
 
 type Config struct {
+	AccountsJSON  string
 	RefreshToken  string
 	Email         string
 	AccountsPath  string
 	AccountsFiles []string
+}
+
+func parseAccountsString(raw string) []AccountRecord {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	var res []AccountRecord
+	// 1. Try parsing JSON array: [{"email":"...", "refresh_token":"..."}]
+	if err := json.Unmarshal([]byte(raw), &res); err == nil && len(res) > 0 {
+		return res
+	}
+	// 2. Try parsing single JSON object: {"email":"...", "refresh_token":"..."}
+	var single AccountRecord
+	if err := json.Unmarshal([]byte(raw), &single); err == nil && strings.TrimSpace(single.RefreshToken) != "" {
+		return []AccountRecord{single}
+	}
+	// 3. Delimited string: "email:token,email:token" or newline separated
+	items := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == '\n' || r == ';'
+	})
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		if parts := strings.SplitN(item, ":", 2); len(parts) == 2 {
+			res = append(res, AccountRecord{
+				Email:        strings.TrimSpace(parts[0]),
+				RefreshToken: strings.TrimSpace(parts[1]),
+			})
+		} else {
+			res = append(res, AccountRecord{
+				RefreshToken: item,
+			})
+		}
+	}
+	return res
 }
 
 func NewClient(cfg Config) *Client {
@@ -127,7 +166,45 @@ func NewClient(cfg Config) *Client {
 		},
 	}
 
-	// 1. Gather all candidate file paths (1.json first, 2.json failover, then accounts.json)
+	seenTokens := make(map[string]bool)
+	seenEmails := make(map[string]bool)
+	var records []AccountRecord
+
+	addAccount := func(email, refreshToken string) {
+		rt := strings.TrimSpace(refreshToken)
+		em := strings.ToLower(strings.TrimSpace(email))
+		if rt == "" || seenTokens[rt] {
+			return
+		}
+		if em != "" && seenEmails[em] {
+			return
+		}
+		seenTokens[rt] = true
+		if em != "" {
+			seenEmails[em] = true
+		}
+		records = append(records, AccountRecord{Email: email, RefreshToken: rt})
+	}
+
+	// 1. Check AccountsJSON from config or ANTIGRAVITY_ACCOUNTS env
+	accountsEnv := cfg.AccountsJSON
+	if accountsEnv == "" {
+		accountsEnv = os.Getenv("ANTIGRAVITY_ACCOUNTS")
+	}
+	for _, acc := range parseAccountsString(accountsEnv) {
+		addAccount(acc.Email, acc.RefreshToken)
+	}
+
+	// 2. Check numbered environment variables: ANTIGRAVITY_REFRESH_TOKEN_1, ANTIGRAVITY_EMAIL_1, etc.
+	for i := 1; i <= 50; i++ {
+		rt := os.Getenv(fmt.Sprintf("ANTIGRAVITY_REFRESH_TOKEN_%d", i))
+		em := os.Getenv(fmt.Sprintf("ANTIGRAVITY_EMAIL_%d", i))
+		if rt != "" {
+			addAccount(em, rt)
+		}
+	}
+
+	// 3. Gather candidate file paths (1.json, 2.json, accounts.json)
 	candidates := []string{"1.json", "2.json", "accounts.json"}
 	if cfg.AccountsPath != "" && cfg.AccountsPath != "accounts.json" {
 		candidates = append([]string{cfg.AccountsPath}, candidates...)
@@ -138,10 +215,6 @@ func NewClient(cfg Config) *Client {
 		}
 	}
 
-	seenTokens := make(map[string]bool)
-	seenEmails := make(map[string]bool)
-	var records []AccountRecord
-
 	for _, filePath := range candidates {
 		data, err := os.ReadFile(filePath)
 		if err != nil {
@@ -151,45 +224,30 @@ func NewClient(cfg Config) *Client {
 		var list []AccountRecord
 		if err := json.Unmarshal(data, &list); err == nil && len(list) > 0 {
 			for _, item := range list {
-				rt := strings.TrimSpace(item.RefreshToken)
-				em := strings.ToLower(strings.TrimSpace(item.Email))
-				if rt != "" && !seenTokens[rt] && (em == "" || !seenEmails[em]) {
-					seenTokens[rt] = true
-					if em != "" {
-						seenEmails[em] = true
-					}
-					records = append(records, AccountRecord{Email: item.Email, RefreshToken: rt})
-				}
+				addAccount(item.Email, item.RefreshToken)
 			}
 			continue
 		}
 
 		var single AccountRecord
 		if err := json.Unmarshal(data, &single); err == nil && strings.TrimSpace(single.RefreshToken) != "" {
-			rt := strings.TrimSpace(single.RefreshToken)
-			em := strings.ToLower(strings.TrimSpace(single.Email))
-			if !seenTokens[rt] && (em == "" || !seenEmails[em]) {
-				seenTokens[rt] = true
-				if em != "" {
-					seenEmails[em] = true
-				}
-				records = append(records, AccountRecord{Email: single.Email, RefreshToken: rt})
-			}
+			addAccount(single.Email, single.RefreshToken)
 		}
 	}
 
-	// Also check environment fallback
-	if strings.TrimSpace(cfg.RefreshToken) != "" {
-		rt := strings.TrimSpace(cfg.RefreshToken)
-		em := strings.ToLower(strings.TrimSpace(cfg.Email))
-		if !seenTokens[rt] && (em == "" || !seenEmails[em]) {
-			seenTokens[rt] = true
-			if em != "" {
-				seenEmails[em] = true
-			}
-			records = append(records, AccountRecord{Email: cfg.Email, RefreshToken: rt})
-		}
+	// 4. Also check standalone environment fallback
+	singleRT := cfg.RefreshToken
+	if singleRT == "" {
+		singleRT = os.Getenv("ANTIGRAVITY_REFRESH_TOKEN")
 	}
+	singleEmail := cfg.Email
+	if singleEmail == "" {
+		singleEmail = os.Getenv("ANTIGRAVITY_EMAIL")
+	}
+	if strings.TrimSpace(singleRT) != "" {
+		addAccount(singleEmail, singleRT)
+	}
+
 
 	// Initialize AccountState objects with default healthy quota estimates
 	for _, rec := range records {

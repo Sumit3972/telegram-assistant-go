@@ -35,7 +35,9 @@ type Config struct {
 	TavilyAPIKey          string
 	AntigravityRefreshToken string
 	AntigravityEmail        string
+	AntigravityAccounts     string
 	CodivAPIKey           string
+
 	WorkerPoolSize        int
 }
 
@@ -84,7 +86,9 @@ func Load() (*Config, error) {
 		TavilyAPIKey:          getEnv("TAVILY_API_KEY", "tvly-dev-dummy"),
 		AntigravityRefreshToken: getEnv("ANTIGRAVITY_REFRESH_TOKEN", ""),
 		AntigravityEmail:        getEnv("ANTIGRAVITY_EMAIL", ""),
+		AntigravityAccounts:     getEnv("ANTIGRAVITY_ACCOUNTS", ""),
 		CodivAPIKey:           getEnv("CODIV_API_KEY", "sk-codiv-0iWnWzTxS4ayN9N0w4ykZu62GlQjuXjrO0lQOZBI"),
+
 		WorkerPoolSize:        workerPoolSize,
 	}
 
