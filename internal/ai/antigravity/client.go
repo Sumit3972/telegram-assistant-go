@@ -33,10 +33,10 @@ const (
 
 	BaseURLDaily = "https://daily-cloudcode-pa.googleapis.com/v1internal"
 
-	ModelGemini38Flash     = "gemini-3.8-flash-high"
-	ModelGemini37Flash     = "gemini-3.7-flash"
-	ModelGemini37FlashHigh = "gemini-3.7-flash-high"
-	ModelGemini36Flash     = "gemini-3.6-flash"
+	ModelGemini3Flash      = "gemini-3-flash"
+	ModelGemini38Flash     = "gemini-3.8-flash-tiered"
+	ModelGemini37Flash     = "gemini-3.7-flash-tiered"
+	ModelGemini36Flash     = "gemini-3.6-flash-tiered"
 	ModelClaudeSonnet      = "claude-sonnet-4-6"
 	ModelClaudeOpus        = "claude-opus-4-6-thinking"
 	ModelImagen3           = "gemini-3.1-flash-image"
@@ -377,7 +377,9 @@ func (c *Client) FetchQuotaFor(ctx context.Context, acc *AccountState) error {
 	defer acc.mu.Unlock()
 	acc.QuotaLastChecked = time.Now()
 
-	if m, ok := modelsRes.Models[ModelGemini38Flash]; ok {
+	if m, ok := modelsRes.Models[ModelGemini3Flash]; ok {
+		acc.GeminiQuotaFraction = m.QuotaInfo.RemainingFraction
+	} else if m, ok := modelsRes.Models[ModelGemini38Flash]; ok {
 		acc.GeminiQuotaFraction = m.QuotaInfo.RemainingFraction
 	}
 	if m, ok := modelsRes.Models[ModelClaudeSonnet]; ok {
@@ -397,7 +399,7 @@ func (c *Client) SyncAllQuotas(ctx context.Context) {
 			log.Printf("[Antigravity] ⚠️ Could not fetch quotas for %s: %v", acc.Email, err)
 		} else {
 			acc.mu.Lock()
-			log.Printf("[Antigravity] 📊 Account %d (%s) Quotas -> Gemini 3.8: %.1f%% | Claude 4.6: %.1f%% | Imagen 3: %.1f%%",
+			log.Printf("[Antigravity] 📊 Account %d (%s) Quotas -> Gemini: %.1f%% | Claude: %.1f%% | Imagen 3: %.1f%%",
 				i+1, acc.Email,
 				acc.GeminiQuotaFraction*100.0,
 				acc.ClaudeQuotaFraction*100.0,
@@ -588,30 +590,53 @@ type ChatOptions struct {
 	MaxTokens   *int
 }
 
+func normalizeModel(m string) string {
+	lower := strings.ToLower(strings.TrimSpace(m))
+	switch lower {
+	case "gemini-3.8-flash", "gemini-3.8-flash-high", "gemini-3.8-flash-tiered":
+		return ModelGemini38Flash
+	case "gemini-3.7-flash", "gemini-3.7-flash-high", "gemini-3.7-flash-tiered":
+		return ModelGemini37Flash
+	case "gemini-3.6-flash", "gemini-3.6-flash-high", "gemini-3.6-flash-tiered":
+		return ModelGemini36Flash
+	case "gemini-flash", "gemini-3-flash", "gemini-3-flash-high":
+		return ModelGemini3Flash
+	case "claude-3-5-sonnet", "claude-3-7-sonnet", "claude-sonnet", "claude-sonnet-4-6":
+		return ModelClaudeSonnet
+	case "claude-3-opus", "claude-opus", "claude-opus-4-6", "claude-opus-4-6-thinking":
+		return ModelClaudeOpus
+	default:
+		return m
+	}
+}
+
 func (c *Client) buildModelHierarchy(requested string) []string {
-	reqLower := strings.ToLower(requested)
+	norm := normalizeModel(requested)
+	reqLower := strings.ToLower(norm)
 	var list []string
 
 	if strings.Contains(reqLower, "claude") {
-		list = []string{
+		if norm != "" {
+			list = append(list, norm)
+		}
+		list = append(list,
 			ModelClaudeSonnet,
 			ModelClaudeOpus,
+			ModelGemini3Flash,
 			ModelGemini38Flash,
 			ModelGemini37Flash,
-			ModelGemini36Flash,
-		}
+		)
 	} else {
-		if requested != "" {
-			list = append(list, requested)
+		if norm != "" {
+			list = append(list, norm)
 		}
-		// Primary fast conversational default
-		list = append(list, ModelGemini38Flash)
-		// Fallbacks: 3.7, 3.6, and Claude reasoning fallback
+		// Primary fast conversational defaults (verified 100% working and high-capacity)
 		list = append(list,
+			ModelGemini3Flash,
+			ModelGemini38Flash,
 			ModelGemini37Flash,
-			ModelGemini37FlashHigh,
-			ModelGemini36Flash,
 			ModelClaudeSonnet,
+			ModelGemini36Flash,
 		)
 	}
 
