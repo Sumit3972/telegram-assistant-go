@@ -179,8 +179,8 @@ func (m *Moderator) HandleUpdate(ctx context.Context, update *domain.TelegramUpd
 			m.commandHandler.HandleCommand(ctx, msg, false)
 			return
 		}
-		// Treat private chat as 1-on-1 AI conversation in parallel
-		go m.convHandler.HandleConversation(context.Background(), msg, false)
+		// Buffer rapid consecutive messages so AI replies to the complete context at once
+		m.convHandler.EnqueueConversation(context.Background(), msg, false)
 		return
 	}
 
@@ -239,11 +239,11 @@ func (m *Moderator) HandleUpdate(ctx context.Context, update *domain.TelegramUpd
 		return
 	}
 
-	// 11. Check if talking to Chavi
-	triggered := m.isTalkingToBot(msg, text)
+	// 11. Check if talking to Chavi (either direct mention/reply, or active ongoing multi-message thought)
+	triggered := m.isTalkingToBot(msg, text) || (msg.From != nil && m.convHandler.HasActiveBatch(msg.Chat.ID, msg.From.ID))
 	if triggered {
 		log.Printf("[Moderator] Group message triggered AI conversation in chat %s: %q", chatIDStr, text)
-		go m.convHandler.HandleConversation(context.Background(), msg, isAdmin)
+		m.convHandler.EnqueueConversation(context.Background(), msg, isAdmin)
 	} else {
 		log.Printf("[Moderator] Group message skipped (not directed at bot) in chat %s: %q", chatIDStr, text)
 	}

@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"telegram-ai-assistant/internal/ai"
@@ -16,6 +17,19 @@ import (
 	"telegram-ai-assistant/internal/media"
 	"telegram-ai-assistant/internal/prompt"
 	"telegram-ai-assistant/internal/telegram"
+)
+
+type messageBatch struct {
+	messages  []*domain.TelegramMessage
+	texts     []string
+	isAdmin   bool
+	firstTime time.Time
+	timer     *time.Timer
+}
+
+const (
+	debounceDuration = 2500 * time.Millisecond // wait 2.5s for user to finish rapid multi-message typing
+	maxBatchWait     = 6000 * time.Millisecond // maximum ceiling delay before flushing
 )
 
 type ConversationHandler struct {
@@ -36,6 +50,9 @@ type ConversationHandler struct {
 	botName        string
 	botUsername    string
 	fallbackKey    string
+
+	batchMu        sync.Mutex
+	batches        map[string]*messageBatch
 }
 
 func (h *ConversationHandler) SetUserbotSender(s domain.UserbotSender) {
@@ -61,20 +78,157 @@ func NewConversationHandler(
 		aiClient:       aiClient,
 		decisionClient: decision.NewClient(codivKey),
 		imageService:   imageService,
-		voiceService:  voiceService,
-		searchService: searchService,
-		musicService:  musicService,
-		historyRepo:   historyRepo,
-		relRepo:       relRepo,
-		groupRepo:     groupRepo,
-		adminRepo:     adminRepo,
-		warningRepo:   warningRepo,
-		modLogRepo:    modLogRepo,
-		botClient:     botClient,
-		botName:       botName,
-		botUsername:   botUsername,
-		fallbackKey:   fallbackKey,
+		voiceService:   voiceService,
+		searchService:  searchService,
+		musicService:   musicService,
+		historyRepo:    historyRepo,
+		relRepo:        relRepo,
+		groupRepo:      groupRepo,
+		adminRepo:      adminRepo,
+		warningRepo:    warningRepo,
+		modLogRepo:     modLogRepo,
+		botClient:      botClient,
+		botName:        botName,
+		botUsername:    botUsername,
+		fallbackKey:    fallbackKey,
+		batches:        make(map[string]*messageBatch),
 	}
+}
+
+// EnqueueConversation buffers rapid sequential messages from the same user into a unified context
+// so the AI replies once to the entire combined thought instead of sending fragmented, repetitive replies.
+func (h *ConversationHandler) EnqueueConversation(ctx context.Context, msg *domain.TelegramMessage, isAdmin bool) {
+	if msg == nil || msg.From == nil {
+		return
+	}
+
+	// Trigger typing indicator immediately so the user sees "Chavi is typing..." right away
+	h.sendChatAction(ctx, msg.Chat.ID, msg.IsUserbot, "typing")
+
+	key := fmt.Sprintf("%d:%d", msg.Chat.ID, msg.From.ID)
+	text := strings.TrimSpace(msg.Text)
+	if text == "" {
+		text = strings.TrimSpace(msg.Caption)
+	}
+
+	h.batchMu.Lock()
+	defer h.batchMu.Unlock()
+
+	batch, exists := h.batches[key]
+	if exists {
+		if batch.timer != nil {
+			batch.timer.Stop()
+		}
+
+		batch.messages = append(batch.messages, msg)
+		if text != "" {
+			batch.texts = append(batch.texts, text)
+		}
+		if isAdmin {
+			batch.isAdmin = true
+		}
+
+		// Check if batch ceiling has been reached
+		if time.Since(batch.firstTime) >= maxBatchWait {
+			log.Printf("[Conversation] ⏰ Batch ceiling reached for %s. Flushing %d messages immediately...", key, len(batch.messages))
+			delete(h.batches, key)
+			go h.processBatch(batch)
+			return
+		}
+
+		// Reset debounce timer
+		batch.timer = time.AfterFunc(debounceDuration, func() {
+			h.flushBatch(key)
+		})
+		log.Printf("[Conversation] ⏳ Buffered message %d from @%s in chat %d (waiting %v for more messages)...",
+			len(batch.messages), msg.From.Username, msg.Chat.ID, debounceDuration)
+		return
+	}
+
+	// New batch
+	var texts []string
+	if text != "" {
+		texts = append(texts, text)
+	}
+
+	newBatch := &messageBatch{
+		messages:  []*domain.TelegramMessage{msg},
+		texts:     texts,
+		isAdmin:   isAdmin,
+		firstTime: time.Now(),
+	}
+
+	newBatch.timer = time.AfterFunc(debounceDuration, func() {
+		h.flushBatch(key)
+	})
+
+	h.batches[key] = newBatch
+}
+
+// HasActiveBatch returns true if there is an active debouncing batch for this chat and user.
+func (h *ConversationHandler) HasActiveBatch(chatID, userID int64) bool {
+	h.batchMu.Lock()
+	defer h.batchMu.Unlock()
+	key := fmt.Sprintf("%d:%d", chatID, userID)
+	_, exists := h.batches[key]
+	return exists
+}
+
+func (h *ConversationHandler) flushBatch(key string) {
+	h.batchMu.Lock()
+	batch, exists := h.batches[key]
+	if !exists {
+		h.batchMu.Unlock()
+		return
+	}
+	delete(h.batches, key)
+	h.batchMu.Unlock()
+
+	h.processBatch(batch)
+}
+
+func (h *ConversationHandler) processBatch(batch *messageBatch) {
+	if batch == nil || len(batch.messages) == 0 {
+		return
+	}
+
+	if len(batch.messages) == 1 {
+		h.HandleConversation(context.Background(), batch.messages[0], batch.isAdmin)
+		return
+	}
+
+	lastMsg := batch.messages[len(batch.messages)-1]
+	mergedMsg := *lastMsg
+
+	var cleanTexts []string
+	for _, t := range batch.texts {
+		trimmed := strings.TrimSpace(t)
+		if trimmed != "" {
+			cleanTexts = append(cleanTexts, trimmed)
+		}
+	}
+	if len(cleanTexts) > 0 {
+		mergedMsg.Text = strings.Join(cleanTexts, "\n")
+	}
+
+	// Preserve image if any message in the batch contained an image
+	for _, m := range batch.messages {
+		if mergedMsg.ImageBase64 == "" && m.ImageBase64 != "" {
+			mergedMsg.ImageBase64 = m.ImageBase64
+		}
+		if len(mergedMsg.Photo) == 0 && len(m.Photo) > 0 {
+			mergedMsg.Photo = m.Photo
+		}
+	}
+
+	uName := mergedMsg.From.Username
+	if uName == "" {
+		uName = mergedMsg.From.FirstName
+	}
+	log.Printf("[Conversation] 📦 Aggregated %d rapid messages from @%s into single context:\n%s",
+		len(batch.messages), uName, mergedMsg.Text)
+
+	h.HandleConversation(context.Background(), &mergedMsg, batch.isAdmin)
 }
 
 func (h *ConversationHandler) sendChatAction(ctx context.Context, chatID int64, isUserbot bool, action string) {
