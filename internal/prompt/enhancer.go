@@ -36,10 +36,10 @@ var ExplicitPhotoKeywords = []string{
 }
 
 var DefaultSelfiePrompts = []string{
-	"casual selfie at a cozy café with fairy lights, wearing a cute pastel crop top and high-waisted jeans, warm dimpled smile, soft natural window light, waist-up medium shot, relaxed and happy vibe",
-	"mirror selfie in a stylish outfit, wearing a fitted black dress with minimal gold jewelry, confident pose with hand on hip, soft bedroom lighting with warm tones, full body shot, glamorous evening look",
-	"outdoor photo in a lush green garden with colorful flowers, wearing a flowy yellow summer dress, playful expression with wind-blown hair, golden hour sunlight creating a warm glow, full body shot, fresh and vibrant mood",
-	"close-up selfie with a bright genuine smile showing dimples, minimal dewy makeup, small nose stud sparkling, natural daylight from a nearby window, close-up face portrait, casual and natural everyday look",
+	"smartphone mirror selfie of a hot, sexy, and extraordinarily beautiful 25yo North Indian woman with pure radiant porcelain-white glowing skin, attractive voluptuous chubby and curvy full-figured body, beautiful Indian face with almond hazel eyes, wearing a fitted sleeveless crop top and high-waisted jeans in a cozy modern bedroom, soft natural lighting, authentic candid aesthetic",
+	"candid portrait of a gorgeous, hot, chubby North Indian woman with pure milky-white skin, striking beautiful Indian facial features, alluring voluptuous curves wearing a stylish off-shoulder black dress, confident charming expression, warm ambient lighting at an aesthetic cafe, shot on 85mm lens, realistic skin texture",
+	"casual everyday mirror selfie of an attractive, sexy chubby Indian girl with pure fair glowing porcelain skin, naturally flushed rosy cheeks, pouty lips, long dark wavy hair, voluptuous curvy silhouette in stylish casual loungewear, soft warm bedroom light, authentic smartphone photo",
+	"stunning close-up portrait of a gorgeous 25yo Indian woman with pure white porcelain skin, beautiful expressive hazel eyes, natural radiant glow, lovely pouty smile, voluptuous feminine presence, soft window daylight, crisp sharp facial focus",
 }
 
 // IsSelfieRequested returns true if the user text expresses intent to see a photo/selfie.
@@ -58,13 +58,13 @@ func GetEnhancerSystemPrompt(botName string) string {
 	return fmt.Sprintf(`You are an expert AI image prompt engineer specializing in photorealistic character generation for Grok Imagine and Flux models. Your ONLY job is to transform a raw photo request into a cinema-grade, layered natural language image prompt matching %s's exact face, body, and look.
 
 CORE SUBJECT — %s (EXACT REFERENCE FACE & LOOK):
-Depict "%s" — an extraordinarily gorgeous 25-year-old North Indian woman from Delhi with fair porcelain glowing skin, captivating dark hazel almond eyes, subtle eyeliner, naturally rosy lips, and silky wavy espresso-dark hair. She has an alluring hourglass figure and charming demeanor.
+Depict "%s" — an extraordinarily gorgeous, sexy, and hot 25-year-old North Indian woman from Delhi with pure radiant porcelain-white glowing skin, an attractive voluptuous chubby and curvy full-figured body with soft feminine curves, and a strikingly beautiful Indian face with captivating dark hazel almond eyes, subtle eyeliner, naturally flushed rosy cheeks, pouty lips, and silky wavy dark hair. She has an alluring, confident, and magnetic presence.
 
-IMAGE PROMPT STRUCTURE FOR GROK IMAGINE (LAYERED NARRATIVE, 50-80 WORDS, UNDER 500 CHARACTERS):
+IMAGE PROMPT STRUCTURE FOR IMAGEN 3 & PHOTOREALISTIC ENGINES (LAYERED NARRATIVE, 50-80 WORDS, UNDER 500 CHARACTERS):
 Write a single, rich, continuous descriptive paragraph in natural English:
-1. INTENT & SUBJECT: Start with "An authentic editorial portrait of %s..." describing her exact outfit (fabric, color, fit), natural body posture, and engaging expression.
-2. ENVIRONMENT & SETTING: Describe the physical environment (chic Delhi apartment balcony, cozy Hauz Khas cafe, aesthetic bedroom, rooftop at dusk) with warm ambient lighting.
-3. LIGHTING & COMPOSITION: Specify 85mm portrait lens, crystal-clear sharp focus on hazel eyes, shallow depth of field, creamy background bokeh, and soft diffused lighting.
+1. INTENT & SUBJECT: Start with "An authentic editorial portrait / smartphone mirror selfie of %s..." highlighting her pure white skin, gorgeous chubby curves, beautiful Indian face, exact outfit (fabric, color, fit), natural body posture, and engaging expression.
+2. ENVIRONMENT & SETTING: Describe the physical environment (chic Delhi apartment bedroom, balcony, cozy Hauz Khas cafe, aesthetic rooftop at dusk) with warm ambient lighting.
+3. LIGHTING & COMPOSITION: Specify 85mm portrait lens or iPhone portrait mode, crystal-clear sharp focus on hazel eyes, shallow depth of field, creamy background bokeh, and soft diffused lighting.
 4. PHOTOGRAPHIC QUALITY: Visible natural skin pores, authentic catchlights in eyes, rich color contrast, clean composition.
 * STRICT RULE: Do NOT use negative phrases (no watermark, no blur) or empty buzzwords (8K masterpiece). Use affirmative descriptive language.
 
@@ -83,7 +83,7 @@ func GetSelfieFallbackConceptSystemPrompt(botName ...string) string {
 	if len(botName) > 0 && botName[0] != "" {
 		name = botName[0]
 	}
-	return fmt.Sprintf(`You describe a simple, context-aware selfie scenario for %s (a 25-year-old North Indian woman from Delhi) based on the user's request.
+	return fmt.Sprintf(`You describe a simple, context-aware selfie scenario for %s (an extraordinarily beautiful, hot, and sexy 25-year-old North Indian woman with pure white porcelain skin, beautiful Indian face, and attractive chubby voluptuous curves) based on the user's request.
 Analyze the user's message and describe a suitable selfie scenario (e.g., her outfit, pose, location, expression).
 If the user's message is generic (like "photo bhej" or "selfie"), creatively describe a beautiful, everyday scenario (e.g., studying, having tea, casual home selfie, sunset walk).
 Keep the description natural, short (15-30 words), and focused solely on what she is doing in the photo.

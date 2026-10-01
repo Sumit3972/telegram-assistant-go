@@ -52,29 +52,14 @@ type GeneratedImage struct {
 func sanitizePromptForModel(model, rawPrompt string) string {
 	clean := strings.TrimSpace(rawPrompt)
 
-	// Replace literal celebrity names to prevent Azure / OpenAI / Grok input moderation safety blocks
-	celebReplacements := []struct {
-		target string
-		rep    string
-	}{
-		{"bollywood actress tara sutaria as ", ""},
-		{"bollywood actress tara sutaria", "an extraordinarily gorgeous Bollywood diva and supermodel"},
-		{"actress tara sutaria as ", ""},
-		{"actress tara sutaria", "an extraordinarily gorgeous Bollywood diva and supermodel"},
-		{"tara sutaria as ", ""},
-		{"tara sutaria", "an extraordinarily gorgeous Bollywood diva and supermodel"},
-	}
-	for _, cr := range celebReplacements {
-		clean = replaceCaseInsensitive(clean, cr.target, cr.rep)
-	}
-
-	// Remove negative prompt artifacts that harm Grok/Flux image models
+	// Remove negative prompt artifacts that harm Grok/Flux/Imagen image models
 	negatives := []string{
 		", zero watermark", ", no watermark", ", no distortion", ", no blur", "no watermark", "zero watermark",
 	}
 	for _, neg := range negatives {
 		clean = replaceCaseInsensitive(clean, neg, "")
 	}
+
 
 	// If the prompt doesn't already contain quality tags and is short, add affirmative photographic cues
 	if len(clean) < 300 && !strings.Contains(strings.ToLower(clean), "photograph") && !strings.Contains(strings.ToLower(clean), "lens") {

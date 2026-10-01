@@ -467,6 +467,30 @@ func isExplicitPhotoRequest(text string) bool {
 	return false
 }
 
+func enrichSelfiePrompt(rawPrompt string) string {
+	p := strings.TrimSpace(rawPrompt)
+	if p == "" {
+		return p
+	}
+
+	lower := strings.ToLower(p)
+	hasChubby := strings.Contains(lower, "chubby") || strings.Contains(lower, "voluptuous") || strings.Contains(lower, "full-figured") || strings.Contains(lower, "curvy")
+	hasFair := strings.Contains(lower, "pure white") || strings.Contains(lower, "milky white") || strings.Contains(lower, "porcelain") || strings.Contains(lower, "fair skin") || strings.Contains(lower, "white skin") || strings.Contains(lower, "fair glowing")
+	hasIndian := strings.Contains(lower, "indian") || strings.Contains(lower, "desi")
+
+	anchor := "An extraordinarily gorgeous, sexy, and hot 25-year-old North Indian woman with pure radiant porcelain-white glowing skin, an attractive voluptuous chubby and curvy full-figured body with soft feminine curves, and a strikingly beautiful Indian face with captivating large almond hazel-brown eyes, defined eyebrows, naturally flushed rosy cheeks, pouty lips, and silky wavy dark hair."
+
+	if !hasChubby || !hasFair || !hasIndian {
+		p = fmt.Sprintf("%s, %s", anchor, p)
+	}
+
+	if !strings.Contains(lower, "lens") && !strings.Contains(lower, "shot on") {
+		p += ", authentic candid smartphone photo aesthetic, shot on 85mm f/1.8 lens, shallow depth of field, realistic skin texture with delicate pores, soft flattering natural lighting"
+	}
+
+	return p
+}
+
 func (h *ConversationHandler) generateAndSendPhoto(ctx context.Context, msg *domain.TelegramMessage, rawPrompt, replyText string, isToolCall ...bool) {
 	cleanPrompt := strings.TrimSpace(rawPrompt)
 	if cleanPrompt == "" || strings.EqualFold(cleanPrompt, "null") || strings.EqualFold(cleanPrompt, "none") {
@@ -490,9 +514,10 @@ func (h *ConversationHandler) generateAndSendPhoto(ctx context.Context, msg *dom
 		return
 	}
 
+	enrichedPrompt := enrichSelfiePrompt(cleanPrompt)
 	h.sendChatAction(ctx, msg.Chat.ID, msg.IsUserbot, "upload_photo")
-	log.Printf("[Conversation] Generating image directly with prompt: %s", cleanPrompt)
-	img, err := h.imageService.GenerateImage(ctx, cleanPrompt)
+	log.Printf("[Conversation] Generating image with enriched prompt: %s", enrichedPrompt)
+	img, err := h.imageService.GenerateImage(ctx, enrichedPrompt)
 	if err != nil || img == nil {
 		log.Printf("[Conversation] Failed to generate image: %v", err)
 		if replyText != "" {
@@ -550,24 +575,22 @@ func (h *ConversationHandler) parseAndDispatchResponse(
 		return
 	}
 
-	// Handle selfie request if present
+	// Handle selfie request if present (sends single photo message with caption)
 	if resp.SelfiePrompt != nil && *resp.SelfiePrompt != "" && !strings.EqualFold(*resp.SelfiePrompt, "null") && !strings.EqualFold(*resp.SelfiePrompt, "none") {
 		go h.generateAndSendPhoto(context.Background(), msg, *resp.SelfiePrompt, resp.ReplyText)
 		return
 	}
 
-	// Handle Voice generation if requested
+	// Handle Voice generation if requested: Return ONLY voice note (do not send text reply alongside it)
 	if resp.VoiceResponse != nil && resp.VoiceResponse.ShouldSpeak && resp.VoiceResponse.TTSText != "" {
 		h.sendChatAction(ctx, msg.Chat.ID, msg.IsUserbot, "record_voice")
 		audioData, err := h.voiceService.GenerateVoice(ctx, resp.VoiceResponse.TTSText)
 		if err == nil && len(audioData) > 0 {
 			h.sendVoice(ctx, msg, audioData)
-			if resp.ReplyText != "" {
-				h.sendMessage(ctx, msg, resp.ReplyText)
-			}
 			return
 		}
 	}
+
 
 	// Sanitize reply text
 	resp.ReplyText = sanitizeReplyText(resp.ReplyText)

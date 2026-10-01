@@ -356,7 +356,11 @@ func (h *CommandHandler) HandleCommand(ctx context.Context, msg *domain.Telegram
 		return true
 
 	case "/help":
-		helpText := `🤖 <b>Janvi Assistant Commands:</b>
+		botLabel := h.botUsername
+		if botLabel == "" {
+			botLabel = "Assistant"
+		}
+		helpText := fmt.Sprintf(`🤖 <b>%s Commands:</b>
 
 <b>General Commands:</b>
 • <code>/rules</code> - View group rules
@@ -375,7 +379,7 @@ func (h *CommandHandler) HandleCommand(ctx context.Context, msg *domain.Telegram
 • <code>/setrules [rules]</code> - Update group rules
 • <code>/purge [number]</code> - Delete recent messages
 
-💡 <i>You can also mention Janvi naturally in chat or ask her for selfies and voice notes!</i>`
+💡 <i>You can also mention @%s naturally in chat or ask for selfies and voice notes!</i>`, botLabel, botLabel)
 		_, _ = h.botClient.SendMessage(ctx, msg.Chat.ID, helpText, telegram.SendMessageOptions{ParseMode: "HTML", ReplyToID: msg.MessageID})
 		return true
 	}
