@@ -356,7 +356,7 @@ func (h *CommandHandler) HandleCommand(ctx context.Context, msg *domain.Telegram
 		return true
 
 	case "/help":
-		botLabel := h.botUsername
+		botLabel := h.botName
 		if botLabel == "" {
 			botLabel = "Assistant"
 		}
