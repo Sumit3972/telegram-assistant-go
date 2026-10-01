@@ -60,12 +60,6 @@ func sanitizePromptForModel(model, rawPrompt string) string {
 		clean = replaceCaseInsensitive(clean, neg, "")
 	}
 
-
-	// If the prompt doesn't already contain quality tags and is short, add affirmative photographic cues
-	if len(clean) < 300 && !strings.Contains(strings.ToLower(clean), "photograph") && !strings.Contains(strings.ToLower(clean), "lens") {
-		clean += ", authentic editorial portrait photography, shot on 85mm f/1.4 lens, natural skin texture, soft ambient lighting"
-	}
-
 	// Strictly limit prompt length for models with character limits
 	maxLen := 4000
 	if strings.Contains(strings.ToLower(model), "z-image") {

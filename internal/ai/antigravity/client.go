@@ -160,9 +160,18 @@ func parseAccountsString(raw string) []AccountRecord {
 }
 
 func NewClient(cfg Config) *Client {
+	clientID := DefaultClientID
+	if clientID == "" {
+		clientID = os.Getenv("ANTIGRAVITY_CLIENT_ID")
+	}
+	clientSecret := DefaultClientSecret
+	if clientSecret == "" {
+		clientSecret = os.Getenv("ANTIGRAVITY_CLIENT_SECRET")
+	}
+
 	c := &Client{
-		clientID:     DefaultClientID,
-		clientSecret: DefaultClientSecret,
+		clientID:     clientID,
+		clientSecret: clientSecret,
 		userAgent:    DefaultUserAgent,
 		httpClient: &http.Client{
 			Timeout: 120 * time.Second,
@@ -877,6 +886,11 @@ func (c *Client) Complete(
 
 // GenerateImage generates an image using Antigravity Imagen 3 with multi-account rotation and failover.
 func (c *Client) GenerateImage(ctx context.Context, prompt string) ([]byte, error) {
+	return c.GenerateImageWithReference(ctx, prompt, nil, "")
+}
+
+// GenerateImageWithReference generates an image using Antigravity Imagen 3 with an optional reference image.
+func (c *Client) GenerateImageWithReference(ctx context.Context, prompt string, refImageBytes []byte, refMime string) ([]byte, error) {
 	accounts := c.getAccountsForTask("image")
 	if len(accounts) == 0 {
 		return nil, errors.New("no antigravity accounts configured")
@@ -893,7 +907,24 @@ func (c *Client) GenerateImage(ctx context.Context, prompt string) ([]byte, erro
 		}
 
 		projectID := c.getProjectIDFor(ctx, acc, token)
-		log.Printf("[Antigravity] Generating image via %s (account %s %d/%d)...", ModelImagen3, acc.Email, accIdx+1, len(accounts))
+		log.Printf("[Antigravity] Generating image via %s (account %s %d/%d, hasRef=%v)...", ModelImagen3, acc.Email, accIdx+1, len(accounts), len(refImageBytes) > 0)
+
+		var parts []map[string]any
+		if len(refImageBytes) > 0 {
+			mime := refMime
+			if mime == "" {
+				mime = "image/png"
+			}
+			parts = append(parts, map[string]any{
+				"inlineData": map[string]any{
+					"mimeType": mime,
+					"data":     base64.StdEncoding.EncodeToString(refImageBytes),
+				},
+			})
+		}
+		parts = append(parts, map[string]any{
+			"text": prompt,
+		})
 
 		reqBody := map[string]any{
 			"project":     projectID,
@@ -904,10 +935,8 @@ func (c *Client) GenerateImage(ctx context.Context, prompt string) ([]byte, erro
 			"request": map[string]any{
 				"contents": []map[string]any{
 					{
-						"role": "user",
-						"parts": []map[string]any{
-							{"text": prompt},
-						},
+						"role":  "user",
+						"parts": parts,
 					},
 				},
 				"generationConfig": map[string]any{
@@ -951,6 +980,7 @@ func (c *Client) GenerateImage(ctx context.Context, prompt string) ([]byte, erro
 			continue
 		}
 
+		log.Printf("[Antigravity] Response %d: %.300s", resp.StatusCode, string(respBytes))
 		var resObj map[string]any
 		if err := json.Unmarshal(respBytes, &resObj); err == nil {
 			if respMap, ok := resObj["response"].(map[string]any); ok {

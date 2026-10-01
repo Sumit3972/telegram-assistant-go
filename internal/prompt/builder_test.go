@@ -48,12 +48,23 @@ func TestProfanityDetector(t *testing.T) {
 	}
 }
 
-func TestVoiceAndSelfieKeywords(t *testing.T) {
-	if !IsVoiceRequested("mujhe voice note sunao") {
-		t.Errorf("Expected voice request to be detected")
+func TestAINativePhotoAndVoiceDirectives(t *testing.T) {
+	params := SystemPromptParams{
+		Identity: IdentityParams{
+			Name:     "Chavi",
+			Username: "Chavi396",
+			Gender:   "female",
+		},
+		Username:       "sam",
+		FirstName:      "Sam",
+		AffectionScore: 70,
 	}
-	if !IsSelfieRequested("apni ek cute selfie dikha") {
-		t.Errorf("Expected selfie request to be detected")
+	p := BuildDynamicSystemPrompt(params)
+	if !strings.Contains(p, "TRIGGER RECOGNITION: Detect ANY user intent requesting a photo") {
+		t.Errorf("Expected system prompt to contain AI-native photo trigger directive")
+	}
+	if !strings.Contains(p, "AUTONOMOUS VOICE DECISIONS") {
+		t.Errorf("Expected system prompt to contain AI-native voice directive")
 	}
 }
 

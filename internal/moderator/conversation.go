@@ -295,66 +295,84 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 		ResponseFormat: map[string]any{"type": "json_object"},
 	}
 
-	log.Printf("[Conversation] Calling AI for user @%s in chat %s (turns=%d)...", username, chatIDStr, len(messages))
-	res, err := h.aiClient.ChatCompletions(ctx, messages, opts)
-	if err != nil || res == nil {
-		log.Printf("[Conversation] AI ChatCompletions error: %v", err)
-		return
-	}
-	log.Printf("[Conversation] ===== AI RESPONSE (model=%s provider=%s) =====\n%s\n===== END AI RESPONSE =====", res.ModelUsed, res.ProviderURL, res.Message.GetStringContent())
+	const maxEvalAttempts = 3
+	var finalContent string
 
-	// 6. Handle Tool Calls if returned
-	if len(res.Message.ToolCalls) > 0 {
-		for _, tc := range res.Message.ToolCalls {
-			h.executeToolCall(ctx, msg, tc, isAdmin, messages, userIDStr, username, chatIDStr)
+	for attempt := 1; attempt <= maxEvalAttempts; attempt++ {
+		log.Printf("[Conversation] Calling AI for user @%s in chat %s (attempt %d/%d, turns=%d)...", username, chatIDStr, attempt, maxEvalAttempts, len(messages))
+		res, err := h.aiClient.ChatCompletions(ctx, messages, opts)
+		if err != nil || res == nil {
+			log.Printf("[Conversation] AI ChatCompletions error: %v", err)
+			return
 		}
-		return
-	}
+		log.Printf("[Conversation] ===== AI RESPONSE (model=%s provider=%s) =====\n%s\n===== END AI RESPONSE =====", res.ModelUsed, res.ProviderURL, res.Message.GetStringContent())
 
-	// 7. Parse structured response
-	content := res.Message.GetStringContent()
+		// Handle Tool Calls if returned
+		if len(res.Message.ToolCalls) > 0 {
+			for _, tc := range res.Message.ToolCalls {
+				h.executeToolCall(ctx, msg, tc, isAdmin, messages, userIDStr, username, chatIDStr)
+			}
+			return
+		}
 
-	// If the model broke character (AI-identity leak / generic refusal), retry once
-	// forcing the next Nova model, since the reply violates the persona contract.
-	if isBrokenCharacterReply(content) {
-		log.Printf("[Conversation] Detected broken-character reply from %s. Retrying with next model...", res.ModelUsed)
-		retryOpts := opts
-		retryOpts.ExcludeModel = res.ModelUsed
-		if retryRes, retryErr := h.aiClient.ChatCompletions(ctx, messages, retryOpts); retryErr == nil && retryRes != nil {
-			retryContent := retryRes.Message.GetStringContent()
-			if len(retryRes.Message.ToolCalls) > 0 {
-				for _, tc := range retryRes.Message.ToolCalls {
-					h.executeToolCall(ctx, msg, tc, isAdmin, messages, userIDStr, username, chatIDStr)
+		candidateContent := res.Message.GetStringContent()
+
+		// OpenJev Quality Check Loop for text & voice note (AI-driven persona, tone, and quality review)
+		if h.decisionClient != nil {
+			var parsedResp domain.StructuredAIResponse
+			cleanJSON := extractCleanJSON(candidateContent)
+			_ = json.Unmarshal([]byte(cleanJSON), &parsedResp)
+
+			voiceScript := ""
+			if parsedResp.VoiceResponse != nil && parsedResp.VoiceResponse.ShouldSpeak {
+				voiceScript = parsedResp.VoiceResponse.TTSText
+			}
+
+			eval, err := h.decisionClient.EvaluateResponse(ctx, text, parsedResp.ReplyText, voiceScript)
+			if err == nil {
+				if eval.Approved {
+					log.Printf("[Conversation] 🎯 OpenJev APPROVED response on attempt %d (conf=%.2f)", attempt, eval.Confidence)
+					finalContent = candidateContent
+					break
 				}
-				return
-			}
-			if !isBrokenCharacterReply(retryContent) {
-				content = retryContent
+
+				log.Printf("[Conversation] ⚠️ OpenJev REJECTED response on attempt %d (defect=%s, conf=%.2f). Retrying...",
+					attempt, eval.Defect, eval.Confidence)
+
+				if attempt < maxEvalAttempts {
+					feedbackText := eval.Feedback
+					if feedbackText == "" {
+						feedbackText = "Make your response shorter (4 to 12 words), more natural authentic Indian girl Hinglish (use casual words like 'yrr', 'acha', 'suno na'), and directly address what the user said."
+					}
+					critiqueMsg := fmt.Sprintf("OpenJev Quality Rejection (%s): %s Output revised JSON.", eval.Defect, feedbackText)
+					messages = append(messages,
+						domain.ChatMessage{Role: "assistant", Content: candidateContent},
+						domain.ChatMessage{Role: "user", Content: critiqueMsg},
+					)
+					continue
+				}
 			}
 		}
+
+		finalContent = candidateContent
+		break
 	}
 
-	h.parseAndDispatchResponse(ctx, msg, content, text, userIDStr, username, chatIDStr)
+	if finalContent != "" {
+		h.parseAndDispatchResponse(ctx, msg, finalContent, text, userIDStr, username, chatIDStr)
+	}
 }
 
-// isBrokenCharacterReply detects when the model breaks the "real human" persona
-// contract by leaking AI-assistant identity phrases or issuing generic refusals.
-func isBrokenCharacterReply(content string) bool {
-	lower := strings.ToLower(content)
-	markers := []string{
-		"as an ai", "as a language model", "i am an ai", "i'm an ai",
-		"my design principles", "i cannot generate", "i can't generate",
-		"i cannot engage", "i can't engage", "i cannot assist", "i can't assist",
-		"i am not able to", "i'm not able to", "i am unable to", "i'm unable to",
-		"how can i help you today", "as a virtual assistant",
-	}
-	for _, m := range markers {
-		if strings.Contains(lower, m) {
-			return true
+func extractCleanJSON(raw string) string {
+	clean := strings.TrimSpace(raw)
+	if idx := strings.Index(clean, "{"); idx != -1 {
+		if lastIdx := strings.LastIndex(clean, "}"); lastIdx != -1 && lastIdx > idx {
+			return clean[idx : lastIdx+1]
 		}
 	}
-	return false
+	return clean
 }
+
 
 func (h *ConversationHandler) executeToolCall(
 	ctx context.Context,
@@ -405,7 +423,7 @@ func (h *ConversationHandler) executeToolCall(
 	case "send_photo":
 		selfiePrompt, _ := args["selfie_prompt"].(string)
 		replyText, _ := args["reply_text"].(string)
-		go h.generateAndSendPhoto(context.Background(), msg, selfiePrompt, replyText, true)
+		go h.generateAndSendPhoto(context.Background(), msg, selfiePrompt, replyText)
 
 	case "play_music", "skip_music", "pause_music", "resume_music", "stop_music":
 		songName, _ := args["song_name"].(string)
@@ -424,74 +442,7 @@ func (h *ConversationHandler) executeToolCall(
 	}
 }
 
-func isExplicitPhotoRequest(text string) bool {
-	lower := strings.ToLower(strings.TrimSpace(text))
-	if lower == "" {
-		return false
-	}
-
-	// Negative requests should never trigger photos
-	negatives := []string{"no photo", "mat bhej", "mat bejo", "don't send", "dont send", "no pic", "photo nahi", "pic nahi"}
-	for _, neg := range negatives {
-		if strings.Contains(lower, neg) {
-			return false
-		}
-	}
-
-	keywords := []string{
-		// Direct photo terms
-		"photo", "selfie", "pic", "pics", "picture", "pictures", "image", "img", "photu", "footo", "tasveer", "tasvir", "dp", "avatar", "shakal", "chehra", "face", "pose",
-		// Direct send/bhej terms (crucial for Hinglish/Hindi)
-		"bhejo", "bejo", "bhej", "bhejna", "bhejiye", "bhej de", "bhej do", "bhejona", "bejona", "bhej na", "bejo na", "bhejo naa", "bejo naa",
-		"bhejega", "bhejegi", "bhejoge", "bhejogi", "send", "share", "drop",
-		// Show / look terms
-		"dikha", "dikhao", "dikhana", "dikhaye", "dikhayi", "dikhayiye", "dikhao na", "dekhna", "dekhu", "dekh", "dekhe", "show me", "send me",
-		// Appearance / outfit / sexy / glam terms
-		"sexy", "hot", "glam", "sundar", "cute", "gorgeous", "nude", "nudes", "outfit", "look", "pehna", "pehan", "dress", "saree", "kurti", "top", "clothes", "kapde", "kapda",
-		"kaisi lag rahi ho", "kaisi dikhti ho", "kaisi dikh rahi ho",
-		// Confirmations / affirmations
-		"haa bejo", "haa bhejo", "ha bejo", "ha bhejo", "haan bejo", "haan bhejo", "yes send", "send please", "bejo please", "bhejo please",
-		"haa please", "ha please", "haan please", "yes please", "haa kar do", "ha kar do",
-	}
-	for _, kw := range keywords {
-		if strings.Contains(lower, kw) {
-			return true
-		}
-	}
-
-	// Also check prompt package's keywords
-	if prompt.IsSelfieRequested(lower) {
-		return true
-	}
-
-	return false
-}
-
-func enrichSelfiePrompt(rawPrompt string) string {
-	p := strings.TrimSpace(rawPrompt)
-	if p == "" {
-		return p
-	}
-
-	lower := strings.ToLower(p)
-	hasChubby := strings.Contains(lower, "chubby") || strings.Contains(lower, "voluptuous") || strings.Contains(lower, "full-figured") || strings.Contains(lower, "curvy")
-	hasFair := strings.Contains(lower, "pure white") || strings.Contains(lower, "milky white") || strings.Contains(lower, "porcelain") || strings.Contains(lower, "fair skin") || strings.Contains(lower, "white skin") || strings.Contains(lower, "fair glowing")
-	hasIndian := strings.Contains(lower, "indian") || strings.Contains(lower, "desi")
-
-	anchor := "An extraordinarily gorgeous, sexy, and hot 25-year-old North Indian woman with pure radiant porcelain-white glowing skin, an attractive voluptuous chubby and curvy full-figured body with soft feminine curves, and a strikingly beautiful Indian face with captivating large almond hazel-brown eyes, defined eyebrows, naturally flushed rosy cheeks, pouty lips, and silky wavy dark hair."
-
-	if !hasChubby || !hasFair || !hasIndian {
-		p = fmt.Sprintf("%s, %s", anchor, p)
-	}
-
-	if !strings.Contains(lower, "lens") && !strings.Contains(lower, "shot on") {
-		p += ", authentic candid smartphone photo aesthetic, shot on 85mm f/1.8 lens, shallow depth of field, realistic skin texture with delicate pores, soft flattering natural lighting"
-	}
-
-	return p
-}
-
-func (h *ConversationHandler) generateAndSendPhoto(ctx context.Context, msg *domain.TelegramMessage, rawPrompt, replyText string, isToolCall ...bool) {
+func (h *ConversationHandler) generateAndSendPhoto(ctx context.Context, msg *domain.TelegramMessage, rawPrompt, replyText string) {
 	cleanPrompt := strings.TrimSpace(rawPrompt)
 	if cleanPrompt == "" || strings.EqualFold(cleanPrompt, "null") || strings.EqualFold(cleanPrompt, "none") {
 		if replyText != "" {
@@ -500,24 +451,9 @@ func (h *ConversationHandler) generateAndSendPhoto(ctx context.Context, msg *dom
 		return
 	}
 
-	userMsgText := msg.Text
-	if userMsgText == "" {
-		userMsgText = msg.Caption
-	}
-
-	fromTool := len(isToolCall) > 0 && isToolCall[0]
-	if !fromTool && !isExplicitPhotoRequest(userMsgText) {
-		log.Printf("[Conversation] Suppressed unsolicited photo generation for message: %q. Sending text reply instead.", userMsgText)
-		if replyText != "" {
-			h.sendMessage(ctx, msg, replyText)
-		}
-		return
-	}
-
-	enrichedPrompt := enrichSelfiePrompt(cleanPrompt)
 	h.sendChatAction(ctx, msg.Chat.ID, msg.IsUserbot, "upload_photo")
-	log.Printf("[Conversation] Generating image with enriched prompt: %s", enrichedPrompt)
-	img, err := h.imageService.GenerateImage(ctx, enrichedPrompt)
+	log.Printf("[Conversation] Generating image with AI prompt: %s", cleanPrompt)
+	img, err := h.imageService.GenerateImage(ctx, cleanPrompt)
 	if err != nil || img == nil {
 		log.Printf("[Conversation] Failed to generate image: %v", err)
 		if replyText != "" {
