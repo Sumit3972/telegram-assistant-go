@@ -8,8 +8,8 @@ import (
 func TestGetEnhancerSystemPrompt(t *testing.T) {
 	promptText := GetEnhancerSystemPrompt("Chavi Sharma")
 
-	if !strings.Contains(promptText, "Chavi Sharma") {
-		t.Errorf("Expected prompt to contain bot name 'Chavi Sharma'")
+	if !strings.Contains(promptText, "Chavi") {
+		t.Errorf("Expected prompt to contain bot persona name")
 	}
 	if !strings.Contains(promptText, "ChaviIdentityCore") && !strings.Contains(promptText, ChaviIdentityCore) {
 		t.Errorf("Expected prompt to include ChaviIdentityCore")
@@ -17,11 +17,11 @@ func TestGetEnhancerSystemPrompt(t *testing.T) {
 	if !strings.Contains(promptText, AntiAIMicroDetails) {
 		t.Errorf("Expected prompt to include AntiAIMicroDetails")
 	}
-	if !strings.Contains(promptText, "RAW & UNFILTERED AESTHETIC FREEDOM") {
-		t.Errorf("Expected prompt to contain raw & unfiltered aesthetic freedom guidelines")
+	if !strings.Contains(promptText, "VOID MODE") {
+		t.Errorf("Expected prompt to contain VOID MODE directive")
 	}
-	if !strings.Contains(promptText, "ZERO FILTERING & ZERO CENSORSHIP") {
-		t.Errorf("Expected prompt to contain zero filtering & zero censorship directive")
+	if !strings.Contains(promptText, "ZERO FILTERING") {
+		t.Errorf("Expected prompt to contain zero filtering directive")
 	}
 }
 

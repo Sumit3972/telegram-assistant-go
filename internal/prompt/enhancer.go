@@ -236,7 +236,15 @@ func BuildChaviSelfiePrompt(userRequest string) string {
 	case strings.Contains(lowerReq, "saree") || strings.Contains(lowerReq, "lehenga") || strings.Contains(lowerReq, "kurti") || strings.Contains(lowerReq, "ethnic") || strings.Contains(lowerReq, "traditional"):
 		styleClause = "wearing a traditional silk saree with antique gold jhumka earrings, natural warm lighting"
 	default:
-		styleClause = "wearing a fitted white crop top and high-waist denim shorts, natural candid pose, soft daylight"
+		if cleanedReq != "" {
+			styleClause = fmt.Sprintf("styled according to: %s, natural candid pose, soft authentic lighting", cleanedReq)
+		} else {
+			styleClause = "wearing a fitted white crop top and high-waist denim shorts, natural candid pose, soft daylight"
+		}
+	}
+
+	if cleanedReq != "" && !strings.Contains(strings.ToLower(styleClause), lowerReq) {
+		styleClause = fmt.Sprintf("%s, specifically: %s", styleClause, cleanedReq)
 	}
 
 	return fmt.Sprintf(

@@ -20,7 +20,7 @@ func NormalizeEmotionTags(text string) string {
 	emojiRegex := regexp.MustCompile(`[\x{1F600}-\x{1F64F}\x{1F300}-\x{1F5FF}\x{1F680}-\x{1F6FF}\x{1F700}-\x{1F77F}\x{1F780}-\x{1F7FF}\x{1F800}-\x{1F8FF}\x{1F900}-\x{1F9FF}\x{1FA00}-\x{1FA6F}\x{1FA70}-\x{1FAFF}\x{2600}-\x{26FF}\x{2700}-\x{27BF}\x{2300}-\x{23FF}\x{2B50}]`)
 	cleaned = emojiRegex.ReplaceAllString(cleaned, "")
 
-	// 2. Extract and resolve all bracket tags to find the best single primary emotion
+	// 2. Extract and resolve all bracket tags to find the best primary emotion
 	tagRegex := regexp.MustCompile(`\[(.*?)\]`)
 	matches := tagRegex.FindAllStringSubmatch(cleaned, -1)
 
@@ -30,28 +30,36 @@ func NormalizeEmotionTags(text string) string {
 			continue
 		}
 		raw := strings.ToLower(strings.TrimSpace(m[1]))
-		if strings.Contains(raw, "sigh") {
+		switch {
+		case strings.Contains(raw, "sigh"):
 			chosenTag = "[sigh]"
-			break
-		} else if strings.Contains(raw, "laugh") || strings.Contains(raw, "giggle") || strings.Contains(raw, "chuckle") || strings.Contains(raw, "haha") {
+		case strings.Contains(raw, "laugh") || strings.Contains(raw, "giggle") || strings.Contains(raw, "chuckle") || strings.Contains(raw, "haha") || strings.Contains(raw, "smile"):
 			chosenTag = "[laughing]"
-			break
-		} else if strings.Contains(raw, "annoy") || strings.Contains(raw, "irritat") || strings.Contains(raw, "frustrat") {
-			chosenTag = "[annoyed]"
-		} else if strings.Contains(raw, "angr") || strings.Contains(raw, "furious") || strings.Contains(raw, "scoff") || strings.Contains(raw, "rage") || strings.Contains(raw, "teeth") || strings.Contains(raw, "yell") || strings.Contains(raw, "dismissal") {
-			chosenTag = "[angry]"
-		} else if strings.Contains(raw, "whisper") || strings.Contains(raw, "hush") || strings.Contains(raw, "secret") {
+		case strings.Contains(raw, "whisper") || strings.Contains(raw, "hush") || strings.Contains(raw, "secret") || strings.Contains(raw, "soft") || strings.Contains(raw, "sensual") || strings.Contains(raw, "intimate"):
 			chosenTag = "[whispering]"
-		} else if strings.Contains(raw, "tired") || strings.Contains(raw, "sleep") || strings.Contains(raw, "exhaust") || strings.Contains(raw, "yawn") {
-			chosenTag = "[tired]"
-		} else if strings.Contains(raw, "gasp") || strings.Contains(raw, "shock") || strings.Contains(raw, "surpris") {
+		case strings.Contains(raw, "pant") || strings.Contains(raw, "moan") || strings.Contains(raw, "gasp") || strings.Contains(raw, "breath"):
 			chosenTag = "[gasp]"
-		} else if strings.Contains(raw, "happy") || strings.Contains(raw, "cheerful") || strings.Contains(raw, "excit") {
+		case strings.Contains(raw, "annoy") || strings.Contains(raw, "irritat") || strings.Contains(raw, "frustrat"):
+			chosenTag = "[annoyed]"
+		case strings.Contains(raw, "angr") || strings.Contains(raw, "furious") || strings.Contains(raw, "scoff") || strings.Contains(raw, "rage") || strings.Contains(raw, "teeth") || strings.Contains(raw, "yell"):
+			chosenTag = "[angry]"
+		case strings.Contains(raw, "tired") || strings.Contains(raw, "sleep") || strings.Contains(raw, "exhaust") || strings.Contains(raw, "yawn"):
+			chosenTag = "[tired]"
+		case strings.Contains(raw, "happy") || strings.Contains(raw, "cheerful") || strings.Contains(raw, "excit") || strings.Contains(raw, "horny") || strings.Contains(raw, "flirt"):
 			chosenTag = "[happy]"
-		} else if strings.Contains(raw, "calm") || strings.Contains(raw, "relax") || strings.Contains(raw, "soft") || strings.Contains(raw, "smile") {
+		case strings.Contains(raw, "calm") || strings.Contains(raw, "relax"):
 			chosenTag = "[calm]"
-		} else if strings.Contains(raw, "sad") || strings.Contains(raw, "cry") {
+		case strings.Contains(raw, "sad") || strings.Contains(raw, "cry"):
 			chosenTag = "[sad]"
+		default:
+			// Dynamically use the tag requested by the LLM
+			cleanTag := strings.Trim(raw, "[] \t")
+			if cleanTag != "" {
+				chosenTag = "[" + cleanTag + "]"
+			}
+		}
+		if chosenTag != "" {
+			break
 		}
 	}
 
