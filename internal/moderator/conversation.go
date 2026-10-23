@@ -644,6 +644,14 @@ func (h *ConversationHandler) dispatchChannelOutput(
 
 	if channel == "photo_only" {
 		log.Printf("[Conversation] Exclusive Channel: PHOTO_ONLY selected. Generating selfie via ModelScope...")
+
+		// 1. Immediately send text companion message so the user receives an instant reply in chat!
+		cleanReply := sanitizeReplyText(finalTextFallback(replyText, userText))
+		if cleanReply != "" {
+			h.sendMessage(ctx, msg, cleanReply)
+		}
+
+		// 2. Launch background photo generation tailored to the user's prompt
 		go h.generateAndSendPhoto(context.Background(), msg, userText, replyText)
 		return
 	}
@@ -838,34 +846,15 @@ func (h *ConversationHandler) executeToolCall(
 
 func (h *ConversationHandler) generateAndSendPhoto(ctx context.Context, msg *domain.TelegramMessage, rawPrompt, replyText string) {
 	h.sendChatAction(ctx, msg.Chat.ID, msg.IsUserbot, "upload_photo")
-	log.Printf("[Conversation] Generating photo via ModelScope with prompt: %s", rawPrompt)
+	log.Printf("[Conversation] Generating photo via ModelScope with user prompt: %s", rawPrompt)
 
 	img, err := h.imageService.GenerateImage(ctx, rawPrompt)
 	if err != nil || img == nil {
 		log.Printf("[Conversation] Failed to generate image: %v", err)
-		if replyText != "" {
-			h.sendMessage(ctx, msg, replyText)
-		}
 		return
 	}
 
-	caption := strings.TrimSpace(replyText)
-	lowerCap := strings.ToLower(caption)
-	refusalKeywords := []string{
-		"shakal dekh", "aaine me", "photo nahi", "pic nahi", "kuch nahi bhej",
-		"pagal ho gaya", "robot dikh", "dimag mat chaat", "aukaat me reh", "chutiye",
-		"madarchod", "bhenchod", "shakal dekhni", "nahi bhej", "nahi dikha",
-	}
-	for _, kw := range refusalKeywords {
-		if strings.Contains(lowerCap, kw) {
-			caption = "ye lo meri photo ✨"
-			break
-		}
-	}
-	if caption == "" {
-		caption = "ye lo meri photo ✨"
-	}
-
+	caption := "ye lo meri photo ✨"
 	if len(img.Data) > 0 {
 		h.sendPhoto(ctx, msg, img.Data, "", caption)
 	} else if img.URL != "" {

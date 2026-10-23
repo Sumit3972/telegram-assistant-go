@@ -118,6 +118,9 @@ func TestChaviSelfiePromptBuilder(t *testing.T) {
 	if !strings.Contains(promptText, "iPhone 15 Pro") {
 		t.Errorf("Expected selfie prompt to contain iPhone camera tag, got: %s", promptText)
 	}
+	if !strings.Contains(promptText, "wearing a yellow kurti sitting at cafe") {
+		t.Errorf("Expected selfie prompt to directly contain user request styling, got: %s", promptText)
+	}
 }
 
 func TestNormalizeEmotionTags(t *testing.T) {

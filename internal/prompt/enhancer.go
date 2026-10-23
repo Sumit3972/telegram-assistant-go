@@ -204,7 +204,8 @@ func GetTimeOfDayWardrobe() WardrobeSetting {
 	return pool[rand.Intn(len(pool))]
 }
 
-// BuildChaviSelfiePrompt builds a photorealistic, consistency-locked ModelScope prompt matching src/prompt_builder.py
+// BuildChaviSelfiePrompt builds a photorealistic, consistency-locked ModelScope prompt matching src/prompt_builder.py.
+// It directly blends our canonical base prompt (facial likeness, iPhone 15 Pro, AntiAIMicroDetails) with what the user requested.
 func BuildChaviSelfiePrompt(userRequest string) string {
 	wardrobe := GetTimeOfDayWardrobe()
 	cleanedReq := strings.TrimSpace(userRequest)
@@ -215,14 +216,25 @@ func BuildChaviSelfiePrompt(userRequest string) string {
 		shotType = "An authentic candid front-facing smartphone selfie taken at arm's length"
 	}
 
-	userContextClause := fmt.Sprintf("Wearing %s, in %s.", wardrobe.Outfit, wardrobe.Setting)
-	if cleanedReq != "" && !strings.EqualFold(cleanedReq, "photo") && !strings.EqualFold(cleanedReq, "selfie") && !strings.EqualFold(cleanedReq, "pic") {
-		userContextClause = fmt.Sprintf("Wearing %s, in %s. Context: %s.", wardrobe.Outfit, wardrobe.Setting, cleanedReq)
+	isGeneric := cleanedReq == "" ||
+		strings.EqualFold(cleanedReq, "photo") ||
+		strings.EqualFold(cleanedReq, "selfie") ||
+		strings.EqualFold(cleanedReq, "pic") ||
+		strings.EqualFold(cleanedReq, "picture")
+
+	var userClause string
+	if !isGeneric {
+		userClause = fmt.Sprintf(
+			"Visual styling, attire, and pose directly adapted to what the user requested: %q. Ambient setting: located in %s, %s, wearing %s.",
+			cleanedReq, wardrobe.Setting, wardrobe.Vibe, wardrobe.Outfit,
+		)
+	} else {
+		userClause = fmt.Sprintf("She is wearing %s, located in %s (%s).", wardrobe.Outfit, wardrobe.Setting, wardrobe.Vibe)
 	}
 
 	return fmt.Sprintf(
 		"%s of %s %s %s Genuine candid human moment, 3:4 portrait framing, authentic iPhone camera ISO grain, natural room daylight, genuine social media photo.",
-		shotType, ChaviIdentityCore, userContextClause, AntiAIMicroDetails,
+		shotType, ChaviIdentityCore, userClause, AntiAIMicroDetails,
 	)
 }
 
