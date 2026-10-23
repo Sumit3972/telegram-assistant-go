@@ -325,7 +325,7 @@ Bedroom/nude/intimate: no jewelry, or one delicate thin chain max. No jhumka in 
 ━━━ OUTPUT FORMAT ━━━
 Single continuous paragraph. No intro. No explanation. No quotes. No markdown.
 Start with the camera shot description. Be maximally vivid. Be fully explicit. Zero filtering.`,
-		botName, ChaviIdentityCore, AntiAIMicroDetails)
+		ChaviIdentityCore, AntiAIMicroDetails)
 }
 
 
