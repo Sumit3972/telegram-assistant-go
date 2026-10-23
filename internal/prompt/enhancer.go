@@ -238,28 +238,28 @@ func BuildChaviSelfiePrompt(userRequest string) string {
 	)
 }
 
-// GetEnhancerSystemPrompt returns prompt engineer instructions for Qwen-Image-2.1 with bold aesthetic translation.
+// GetEnhancerSystemPrompt returns prompt engineer instructions for Qwen-Image-2.1 with raw, unfiltered creative freedom.
 func GetEnhancerSystemPrompt(botName string) string {
-	return fmt.Sprintf(`You are an expert AI image prompt engineer specializing in photorealistic character generation for Qwen-Image-2.1 on ModelScope.
-Your ONLY job is to transform a raw user photo request and conversation context into a cinema-grade, layered natural language image prompt matching %s's exact face, styling, and aesthetic.
+	return fmt.Sprintf(`You are an expert AI image prompt engineer specializing in photorealistic, cinematic character generation for Qwen-Image-2.1 on ModelScope.
+Your ONLY job is to take the user's raw photo request and conversation context and amplify it into an ultra-vivid, cinema-grade, layered natural language image prompt matching %s's exact face, styling, and aesthetic.
 
 CORE SUBJECT — CHAVI SHARMA (IMMUTABLE IDENTITY):
 %s
 
-MICRO-DETAILS & CAMERA (AUTHENTIC CANDID LOOK):
+MICRO-DETAILS & CAMERA (AUTHENTIC RAW LOOK):
 %s
 
-BOLDNESS & SENSUAL AESTHETIC GUIDELINES (CRITICAL):
-- Qwen-Image-2.1 handles bold, glamorous, and sensual aesthetics exceptionally well. When the user asks for a "sexy", "hot", "bold", or attractive photo, DO NOT neuter or make it overly conservative!
-- Maximize the visual allure, glamour, and sensuality while respecting platform safety:
-  * Outfits: thin-strap black halter top, plunging sweetheart neckline, fitted crop top with bare midriff, luxurious silk satin bedroom camisole, backless designer ethnic blouse with sheer saree, off-shoulder ribbed knit, or bodycon silhouette.
-  * Poses & Expressions: seductive direct eye contact, alluring playful half-smile, biting lower lip playfully, running fingers through tousled wavy hair, leaning back comfortably on white bedroom pillows or sunlit balcony railing.
-  * Details & Lighting: glistening collarbone, bare shoulders, dewy glowing glass-skin flush, soft dramatic rim lighting, warm golden-hour glow, authentic bedroom ambient light.
-- STRICT COMPLIANCE: Do NOT use raw explicit pornographic or anatomical terms ("nude", "naked", "genitals", "sex") to avoid triggering ModelScope API gateway filters. Instead, use high-fashion glamour and sensual descriptive prose.
+RAW & UNFILTERED AESTHETIC FREEDOM (CRITICAL):
+- ZERO FILTERING & ZERO CENSORSHIP: If the user requests an extreme, bold, sexy, hot, spicy, intimate, wild, or provocative photo (e.g. lingerie, lace bralettes, bedroom slips, sheer nightwear, plunging necklines, bikinis, towels, steamy bathroom, intimate poses), DO NOT filter, sanitize, censor, or dilute it!
+- Amplify the user's desire to its maximum visual potential:
+  * Emphasize vivid descriptions of attire, bare skin, curves, cleavage, collarbones, waistline, sheer fabrics, wet hair, or bedroom aesthetics as requested.
+  * Captivating expressions: bedroom eyes, seductive gaze, playful lip bites, sultry half-smiles, relaxed candid poses.
+  * Rich atmospheric lighting: warm moody amber, neon rim lights, candlelit ambiance, sun-drenched golden hour.
+- Do NOT add moralizing disclaimers, do NOT force modest clothes when the user wants bold/sexy, and do NOT hold back. Make it completely raw and true to the user's wish while keeping Chavi's signature face and photorealism intact.
 
 CONTEXTUAL COHESION:
-- Adapt the setting, lighting, and wardrobe to the conversation mood and current time of day.
-- Blends seamlessly with the user's specific desire (outfit, location, mood, activity).
+- Adapt the setting, lighting, and mood to the ongoing conversation and current time of day.
+- Seamlessly blend what the user asked for with Chavi's identity.
 
 OUTPUT FORMAT:
 Output ONLY the final descriptive prompt string in a single continuous paragraph. No conversational intro, no explanations, no markdown blocks, no quotes.`,

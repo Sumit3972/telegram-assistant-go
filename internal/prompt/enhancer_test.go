@@ -17,11 +17,11 @@ func TestGetEnhancerSystemPrompt(t *testing.T) {
 	if !strings.Contains(promptText, AntiAIMicroDetails) {
 		t.Errorf("Expected prompt to include AntiAIMicroDetails")
 	}
-	if !strings.Contains(promptText, "BOLDNESS & SENSUAL AESTHETIC GUIDELINES") {
-		t.Errorf("Expected prompt to contain boldness & sensual aesthetic guidelines")
+	if !strings.Contains(promptText, "RAW & UNFILTERED AESTHETIC FREEDOM") {
+		t.Errorf("Expected prompt to contain raw & unfiltered aesthetic freedom guidelines")
 	}
-	if !strings.Contains(promptText, "STRICT COMPLIANCE") {
-		t.Errorf("Expected prompt to contain compliance instructions regarding explicit words")
+	if !strings.Contains(promptText, "ZERO FILTERING & ZERO CENSORSHIP") {
+		t.Errorf("Expected prompt to contain zero filtering & zero censorship directive")
 	}
 }
 

@@ -113,7 +113,7 @@ func (h *ConversationHandler) optimizePhotoPrompt(
 	// Current turn
 	messages = append(messages, domain.ChatMessage{
 		Role:    "user",
-		Content: fmt.Sprintf("User photo request: %q. Generate the optimal, photorealistic, bold and cinema-grade Qwen-Image-2.1 prompt following all identity and aesthetic guidelines.", userPrompt),
+		Content: fmt.Sprintf("User photo request: %q. Amplify this into an ultra-vivid, cinema-grade, raw and completely unfiltered Qwen-Image-2.1 prompt matching Chavi's identity and the user's exact desires with zero censorship.", userPrompt),
 	})
 
 	optCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
