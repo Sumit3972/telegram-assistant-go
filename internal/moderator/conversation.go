@@ -330,7 +330,9 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 	if isPhotoReq {
 		exclusiveChannel = "photo_only"
 		intent = "asking_photo"
-		log.Printf("[Conversation] 📸 Detected photo request -> Setting exclusive channel to PHOTO_ONLY.")
+		log.Printf("[Conversation] 📸 Detected photo request -> Launching dynamic photo pipeline (PHOTO_ONLY).")
+		go h.processPhotoRequest(context.Background(), msg, text, recent, affectionScore)
+		return
 	} else if isVoiceReq {
 		exclusiveChannel = "voice_only"
 		intent = "asking_voice"
@@ -643,16 +645,10 @@ func (h *ConversationHandler) dispatchChannelOutput(
 	}
 
 	if channel == "photo_only" {
-		log.Printf("[Conversation] Exclusive Channel: PHOTO_ONLY selected. Generating selfie via ModelScope...")
-
-		// 1. Immediately send text companion message so the user receives an instant reply in chat!
-		cleanReply := sanitizeReplyText(finalTextFallback(replyText, userText))
-		if cleanReply != "" {
-			h.sendMessage(ctx, msg, cleanReply)
-		}
-
-		// 2. Launch background photo generation tailored to the user's prompt
-		go h.generateAndSendPhoto(context.Background(), msg, userText, replyText)
+		log.Printf("[Conversation] Exclusive Channel: PHOTO_ONLY selected. Launching dynamic photo pipeline...")
+		chatIDStr := fmt.Sprintf("%d", msg.Chat.ID)
+		recent, _ := h.historyRepo.GetRecentMessages(ctx, chatIDStr, 10)
+		go h.processPhotoRequest(context.Background(), msg, userText, recent, 50)
 		return
 	}
 
@@ -824,8 +820,11 @@ func (h *ConversationHandler) executeToolCall(
 
 	case "send_photo":
 		selfiePrompt, _ := args["selfie_prompt"].(string)
-		replyText, _ := args["reply_text"].(string)
-		go h.generateAndSendPhoto(context.Background(), msg, selfiePrompt, replyText)
+		if selfiePrompt == "" {
+			selfiePrompt, _ = args["prompt"].(string)
+		}
+		recent, _ := h.historyRepo.GetRecentMessages(ctx, chatIDStr, 10)
+		go h.processPhotoRequest(context.Background(), msg, selfiePrompt, recent, 50)
 
 	case "play_music", "skip_music", "pause_music", "resume_music", "stop_music":
 		songName, _ := args["song_name"].(string)
@@ -845,21 +844,9 @@ func (h *ConversationHandler) executeToolCall(
 }
 
 func (h *ConversationHandler) generateAndSendPhoto(ctx context.Context, msg *domain.TelegramMessage, rawPrompt, replyText string) {
-	h.sendChatAction(ctx, msg.Chat.ID, msg.IsUserbot, "upload_photo")
-	log.Printf("[Conversation] Generating photo via ModelScope with user prompt: %s", rawPrompt)
-
-	img, err := h.imageService.GenerateImage(ctx, rawPrompt)
-	if err != nil || img == nil {
-		log.Printf("[Conversation] Failed to generate image: %v", err)
-		return
-	}
-
-	caption := "ye lo meri photo ✨"
-	if len(img.Data) > 0 {
-		h.sendPhoto(ctx, msg, img.Data, "", caption)
-	} else if img.URL != "" {
-		h.sendPhoto(ctx, msg, nil, img.URL, caption)
-	}
+	chatIDStr := fmt.Sprintf("%d", msg.Chat.ID)
+	recent, _ := h.historyRepo.GetRecentMessages(ctx, chatIDStr, 10)
+	h.processPhotoRequest(ctx, msg, rawPrompt, recent, 50)
 }
 
 func sanitizeReplyText(text string) string {
