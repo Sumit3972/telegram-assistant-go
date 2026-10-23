@@ -33,6 +33,8 @@ type SystemPromptParams struct {
 	SearchContext    string
 	CritiqueFeedback string
 	Intent           string
+	ExclusiveChannel string
+	UserMessage      string
 	ShouldReact      bool
 	SuggestedEmoji   string
 	HistoryContext   string
@@ -248,8 +250,41 @@ You are chatting with someone in DMs whose real name is not yet confirmed%s.
 		interlocutorStr = fmt.Sprintf("@%s", username)
 		interlocutorDesc = fmt.Sprintf("@%s", username)
 	} else {
-		interlocutorStr = "Private User (name unconfirmed)"
-		interlocutorDesc = "someone"
+		interlocutorStr = "Friend"
+		interlocutorDesc = "Friend"
+	}
+
+	var actionDirectiveBlock string
+	if params.ExclusiveChannel == "photo_only" || params.Intent == "asking_photo" {
+		actionDirectiveBlock = `
+<active_channel_directive>
+CRITICAL SITUATIONAL INSTRUCTION: YOU ARE SENDING A REAL PHOTO / SELFIE RIGHT NOW!
+The user asked for your picture or selfie, and you ARE sharing a real photorealistic photo of yourself with this message!
+Your written response ("reply_text") will be the CAPTION / COMPANION MESSAGE sent directly with your photo.
+RULES FOR YOUR REPLY:
+1. PERFECT HARMONY: Your caption MUST be in sync with sending a photo! Be cute, playful, relatable, or flirty like a real 21yo Delhi/Jaipur girl sharing a selfie:
+   - "ye le dekh le haha, abhi room me baithi thi... bata kaisi lag rahi hoon? ✨"
+   - "le bhej di photo, zyada mat ghoorna ab 😏"
+   - "ye abhi clg practical ke baad li thi, kaisa lag raha h outfit?"
+   - "le dekh le, khush ab? haha"
+   - "ye le meri photo, bata kaisa lag raha h?"
+2. STRICT BAN ON REFUSAL / INSULTS:
+   NEVER refuse, scold, or say "photo nahi bhejungi", "shakal aaine me dekh", or "pagal ho gaya kya"!
+   You are literally sending the photo right now with this message! Refusing or acting angry when you are delivering the photo makes you look broken and contradictory.
+</active_channel_directive>
+`
+	} else if params.ExclusiveChannel == "voice_only" || params.Intent == "asking_voice" {
+		actionDirectiveBlock = `
+<active_channel_directive>
+CRITICAL SITUATIONAL INSTRUCTION: YOU ARE SENDING A REAL NATIVE VOICE NOTE RIGHT NOW!
+Your "voice_script" is being synthesized into an audio voice note via Fish Audio S2.1 Pro TTS:
+- Speak spontaneously into your phone mic in natural Hindi:
+  * "[happy] अरे सुन ना! ले सुन ली मेरी आवाज़? अब यकीन आया तुझे? haha"
+  * "[calm] हाँ यार, अभी बस कमरे में बैठी हूँ... बोल क्या बात करनी थी?"
+  * "[laughing] अच्छा जी? अब वॉइस नोट भेज के यकीन दिलाना पड़ेगा? haha"
+- Your "reply_text" should be a short natural companion text: e.g. "ye le sun le voice note 🎧" or "suno madam ji ki aawaz haha".
+</active_channel_directive>
+`
 	}
 
 	return fmt.Sprintf(`<system_instructions>
@@ -276,7 +311,7 @@ You are performing the role of ONE real human girl named "%s" (%s is chatting wi
 - Interlocutor: %s (Affection Score: %d/100, Tier: %s)
 - Cognitive Perception: Intent=%s | %s
 </character_profile>
-%s%s%s%s
+%s%s%s%s%s
 <conversational_modes>
 1. CASUAL / DAILY BANTER: Friendly, talkative, relatable %s student life updates:
    - "kuch nahi yrr, bas lab practical se nikli abhi. sar dard ho gaya code debug karte karte"
@@ -305,7 +340,7 @@ You MUST respond with valid JSON containing three distinct fields:
 		PersonaName, PersonaAge, PersonaLocation, PersonaCollege,
 		PersonaCity, timeStr, timeVibe,
 		interlocutorStr, params.AffectionScore, tier, intent, reactionGuideline,
-		nameInstructionBlock, factsBlock, searchBlock, critiqueBlock,
+		nameInstructionBlock, factsBlock, searchBlock, critiqueBlock, actionDirectiveBlock,
 		PersonaCollege,
 	)
 }

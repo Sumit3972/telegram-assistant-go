@@ -130,3 +130,27 @@ func TestNormalizeEmotionTags(t *testing.T) {
 		t.Errorf("Expected emojis to be stripped from voice note, got: %s", normalized)
 	}
 }
+
+func TestBuildDynamicSystemPromptPhotoDirective(t *testing.T) {
+	params := SystemPromptParams{
+		Identity: IdentityParams{
+			Name:     "Chavi Sharma",
+			Username: "Chavi396",
+			Gender:   "female",
+		},
+		ExclusiveChannel: "photo_only",
+		Intent:           "asking_photo",
+	}
+
+	p := BuildDynamicSystemPrompt(params)
+	if !strings.Contains(p, "<active_channel_directive>") {
+		t.Errorf("Expected active_channel_directive block in prompt")
+	}
+	if !strings.Contains(p, "YOU ARE SENDING A REAL PHOTO / SELFIE RIGHT NOW!") {
+		t.Errorf("Expected photo sending instruction in prompt")
+	}
+	if !strings.Contains(p, "STRICT BAN ON REFUSAL / INSULTS") {
+		t.Errorf("Expected strict ban on refusal/insults in photo directive")
+	}
+}
+

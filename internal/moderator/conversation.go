@@ -322,16 +322,18 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 	userLower := strings.ToLower(text)
 	isPhotoReq := intent == "asking_photo" || (
 		(strings.Contains(userLower, "photo") || strings.Contains(userLower, "pic") || strings.Contains(userLower, "selfie") || strings.Contains(userLower, "picture")) &&
-			(strings.Contains(userLower, "bhej") || strings.Contains(userLower, "send") || strings.Contains(userLower, "dikha") || strings.Contains(userLower, "share") || strings.Contains(userLower, "click") || strings.Contains(userLower, "de")))
+			(strings.Contains(userLower, "bhej") || strings.Contains(userLower, "send") || strings.Contains(userLower, "dikha") || strings.Contains(userLower, "share") || strings.Contains(userLower, "click") || strings.Contains(userLower, "de") || strings.Contains(userLower, "bejo") || strings.Contains(userLower, "bhejo") || strings.Contains(userLower, "dikhao") || strings.Contains(userLower, "dikhana") || strings.Contains(userLower, "naa") || strings.Contains(userLower, "na")))
 	isVoiceReq := intent == "asking_voice" || (
 		(strings.Contains(userLower, "voice") || strings.Contains(userLower, "audio") || strings.Contains(userLower, "awaaz") || strings.Contains(userLower, "bol ke") || strings.Contains(userLower, "speak")) &&
-			(strings.Contains(userLower, "bhej") || strings.Contains(userLower, "send") || strings.Contains(userLower, "sunao") || strings.Contains(userLower, "karo") || strings.Contains(userLower, "note")))
+			(strings.Contains(userLower, "bhej") || strings.Contains(userLower, "send") || strings.Contains(userLower, "sunao") || strings.Contains(userLower, "karo") || strings.Contains(userLower, "note") || strings.Contains(userLower, "bhejo") || strings.Contains(userLower, "bejo")))
 
 	if isPhotoReq {
 		exclusiveChannel = "photo_only"
+		intent = "asking_photo"
 		log.Printf("[Conversation] 📸 Detected photo request -> Setting exclusive channel to PHOTO_ONLY.")
 	} else if isVoiceReq {
 		exclusiveChannel = "voice_only"
+		intent = "asking_voice"
 		log.Printf("[Conversation] 🎙️ Detected voice request -> Setting exclusive channel to VOICE_ONLY.")
 	}
 
@@ -440,6 +442,8 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 			SearchContext:    searchContext,
 			CritiqueFeedback: critiqueFeedback,
 			Intent:           intent,
+			ExclusiveChannel: exclusiveChannel,
+			UserMessage:      text,
 			ShouldReact:      pre.ShouldReact,
 			SuggestedEmoji:   pre.ReactionEmoji,
 			HistoryContext:   historyContext,
@@ -513,6 +517,23 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 		log.Printf("[Conversation] OpenJev Loop 2 Critique (Attempt %d/%d): passed=%v feedback=%s",
 			attempt, maxAttempts, critique.Passed, critique.Feedback)
 
+		// Extra safeguard: When sending a photo, draft reply MUST be a caption, not an insult/refusal!
+		if exclusiveChannel == "photo_only" {
+			lowerReply := strings.ToLower(replyText)
+			refusalMarkers := []string{
+				"shakal dekh", "aaine me", "photo nahi", "pic nahi", "kuch nahi bhej",
+				"pagal ho gaya", "robot dikh", "dimag mat chaat", "aukaat me reh", "chutiye",
+				"madarchod", "bhenchod", "shakal dekhni", "nahi bhej", "nahi dikha",
+			}
+			for _, rm := range refusalMarkers {
+				if strings.Contains(lowerReply, rm) {
+					critique.Passed = false
+					critique.Feedback = "You are sending a real selfie photo right now! Do NOT refuse or insult the user. Write a cute, playful selfie caption in reply_text (e.g. 'ye le dekh le haha, abhi room me baithi thi... bata kaisi lag rahi hoon? ✨')."
+					break
+				}
+			}
+		}
+
 		if critique.Passed {
 			finalReplyText = replyText
 			finalVoiceScript = voiceScript
@@ -559,6 +580,34 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 			finalReplyText = "kya pagal ho gaya h kya yrr? dimag theek h tera? 🙄"
 			finalVoiceScript = "[sigh] क्या पागल हो गया है क्या यार? दिमाग ठीक है तेरा?"
 			finalReactionEmoji = "🙄"
+		}
+	}
+
+	// 8b. Photo Channel Safeguard: Auto-correct any lingering refusal or insult into a cute selfie caption
+	if exclusiveChannel == "photo_only" {
+		lowerDraft := strings.ToLower(finalReplyText)
+		refusalKeywords := []string{
+			"shakal dekh", "aaine me", "photo nahi", "pic nahi", "kuch nahi bhej",
+			"pagal ho gaya", "robot dikh", "dimag mat chaat", "aukaat me reh", "chutiye",
+			"madarchod", "bhenchod", "shakal dekhni", "nahi bhej", "nahi dikha",
+		}
+		needsOverride := false
+		for _, kw := range refusalKeywords {
+			if strings.Contains(lowerDraft, kw) {
+				needsOverride = true
+				break
+			}
+		}
+		if needsOverride || strings.TrimSpace(finalReplyText) == "" {
+			log.Printf("[Conversation] ⚠️ Contradictory refusal detected in draft while sending photo (%q). Auto-correcting to cute photo caption...", finalReplyText)
+			cuteCaptions := []string{
+				"ye le dekh le haha, abhi room me baithi thi... bata kaisi lag rahi hoon? ✨",
+				"le bhej di photo, zyada mat ghoorna ab 😏",
+				"ye abhi clg practical ke baad li thi, kaisa lag raha h outfit?",
+				"le photo, khush ab? haha ✨",
+				"ye le meri photo, bata kaisa lag raha h?",
+			}
+			finalReplyText = cuteCaptions[rand.Intn(len(cuteCaptions))]
 		}
 	}
 
@@ -800,7 +849,19 @@ func (h *ConversationHandler) generateAndSendPhoto(ctx context.Context, msg *dom
 		return
 	}
 
-	caption := replyText
+	caption := strings.TrimSpace(replyText)
+	lowerCap := strings.ToLower(caption)
+	refusalKeywords := []string{
+		"shakal dekh", "aaine me", "photo nahi", "pic nahi", "kuch nahi bhej",
+		"pagal ho gaya", "robot dikh", "dimag mat chaat", "aukaat me reh", "chutiye",
+		"madarchod", "bhenchod", "shakal dekhni", "nahi bhej", "nahi dikha",
+	}
+	for _, kw := range refusalKeywords {
+		if strings.Contains(lowerCap, kw) {
+			caption = "ye lo meri photo ✨"
+			break
+		}
+	}
 	if caption == "" {
 		caption = "ye lo meri photo ✨"
 	}
