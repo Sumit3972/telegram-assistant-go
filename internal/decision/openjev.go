@@ -156,9 +156,14 @@ func (c *Client) PreDecision(ctx context.Context, userText, historyContext strin
 	now := time.Now().In(loc)
 	currentTimeStr := now.Format("Monday, January 02, 2006 at 03:04 PM IST")
 
+	var contextBlock string
+	if strings.TrimSpace(historyContext) != "" {
+		contextBlock = fmt.Sprintf("\n[Recent Conversation History (Background Context Only)]:\n%s\n", strings.TrimSpace(historyContext))
+	}
+
 	state := fmt.Sprintf(
-		"Current Date & Time: %s (Year: %d)\nPersona: Chavi Sharma, 21yo BCA student in Jaipur, Rajasthan, India\nUser message: %s\nContext: %s",
-		currentTimeStr, now.Year(), userText, historyContext,
+		"Current Date & Time: %s (Year: %d)\nPersona: Chavi Sharma, 21yo BCA student in Jaipur, Rajasthan, India%s\n>>> CURRENT INCOMING USER MESSAGE TO EVALUATE: %q <<<",
+		currentTimeStr, now.Year(), contextBlock, userText,
 	)
 
 	questions := map[string]interface{}{
@@ -168,13 +173,13 @@ func (c *Client) PreDecision(ctx context.Context, userText, historyContext strin
 		},
 		"intent": choiceQuestion{
 			Type:         "choice",
-			Instructions: "Primary conversation intent",
+			Instructions: "Primary intent of the CURRENT INCOMING USER MESSAGE. If the user asks for an audio, voice clip, or voice note ('voice note bejo', 'audio sunao', 'awaaz sunao', 'bol ke bhej'), choose asking_voice. If requesting a photo, picture, or selfie ('photo bhej', 'pic dikha', 'selfie'), choose asking_photo. Never confuse voice requests with photo requests.",
 			Criteria: map[string]string{
 				"casual_chat":  "Friendly chat, banter, asking what she is doing",
 				"flirty":       "Flirting, romantic compliments, playful teasing",
 				"bca_college":  "Talking about college, coding practicals, exams, BCA study",
 				"rude_abuse":   "Insults, harassment, abusive or vulgar messages",
-				"asking_voice": "Explicitly asking for an audio or voice note",
+				"asking_voice": "Explicitly asking for an audio clip or voice note",
 				"asking_photo": "Requesting a picture, selfie, or outfit photo",
 			},
 		},
@@ -184,7 +189,7 @@ func (c *Client) PreDecision(ctx context.Context, userText, historyContext strin
 		},
 		"exclusive_channel": choiceQuestion{
 			Type:         "choice",
-			Instructions: "Select strictly ONE output channel for Chavi: if intent is asking_photo choose photo_only; if intent is asking_voice choose voice_only; otherwise choose text_only.",
+			Instructions: "Select strictly ONE output channel for the latest incoming message: if user asks for voice note/audio choose voice_only; if user asks for photo/selfie choose photo_only; otherwise choose text_only.",
 			Criteria: map[string]string{
 				"text_only":  "Send only a casual written text DM",
 				"voice_only": "Send only a natural native voice note audio clip",
@@ -305,6 +310,31 @@ func (c *Client) PreDecision(ctx context.Context, userText, historyContext strin
 	channelChoice := answers["exclusive_channel"].Choice
 	if channelChoice == "" {
 		channelChoice = "text_only"
+	}
+
+	// Keyword-grounded guardrails: Prevent cross-modality classification errors
+	userLower := strings.ToLower(userText)
+	hasVoiceKW := strings.Contains(userLower, "voice") || strings.Contains(userLower, "audio") ||
+		strings.Contains(userLower, "awaaz") || strings.Contains(userLower, "awaz") ||
+		strings.Contains(userLower, "bol ke") || strings.Contains(userLower, "bolke") ||
+		strings.Contains(userLower, "voice note")
+	hasPhotoKW := strings.Contains(userLower, "photo") || strings.Contains(userLower, "pic") ||
+		strings.Contains(userLower, "selfie") || strings.Contains(userLower, "picture") ||
+		strings.Contains(userLower, "tasveer")
+
+	if hasVoiceKW && !hasPhotoKW {
+		intentChoice = "asking_voice"
+		channelChoice = "voice_only"
+	} else if hasPhotoKW && !hasVoiceKW {
+		intentChoice = "asking_photo"
+		channelChoice = "photo_only"
+	} else {
+		// Reconcile internal contradictions from OpenJev
+		if channelChoice == "voice_only" && intentChoice == "asking_photo" {
+			intentChoice = "asking_voice"
+		} else if channelChoice == "photo_only" && intentChoice == "asking_voice" {
+			intentChoice = "asking_photo"
+		}
 	}
 
 	needsSearch := answers["needs_web_search"].Noul > 0.65

@@ -286,13 +286,14 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 		affectionScore = rel.AffectionScore
 	}
 
-	// 2. Get recent history
+	// 2. Get recent history (Take the 6 most recent messages chronologically for background context)
 	recent, _ := h.historyRepo.GetRecentMessages(ctx, chatIDStr, 20)
 	var historySnippets []string
-	for _, m := range recent {
-		if len(historySnippets) >= 4 {
-			break
-		}
+	startIdx := 0
+	if len(recent) > 6 {
+		startIdx = len(recent) - 6
+	}
+	for _, m := range recent[startIdx:] {
 		historySnippets = append(historySnippets, fmt.Sprintf("%s: %s", m.Username, m.MessageText))
 	}
 	historyContext := strings.Join(historySnippets, "\n")
@@ -320,12 +321,35 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 	// Auto-align exclusive channel if user asks for photo or voice
 	exclusiveChannel := pre.ExclusiveChannel
 	userLower := strings.ToLower(text)
-	isPhotoReq := intent == "asking_photo" || (
-		(strings.Contains(userLower, "photo") || strings.Contains(userLower, "pic") || strings.Contains(userLower, "selfie") || strings.Contains(userLower, "picture")) &&
-			(strings.Contains(userLower, "bhej") || strings.Contains(userLower, "send") || strings.Contains(userLower, "dikha") || strings.Contains(userLower, "share") || strings.Contains(userLower, "click") || strings.Contains(userLower, "de") || strings.Contains(userLower, "bejo") || strings.Contains(userLower, "bhejo") || strings.Contains(userLower, "dikhao") || strings.Contains(userLower, "dikhana") || strings.Contains(userLower, "naa") || strings.Contains(userLower, "na")))
-	isVoiceReq := intent == "asking_voice" || (
-		(strings.Contains(userLower, "voice") || strings.Contains(userLower, "audio") || strings.Contains(userLower, "awaaz") || strings.Contains(userLower, "bol ke") || strings.Contains(userLower, "speak")) &&
-			(strings.Contains(userLower, "bhej") || strings.Contains(userLower, "send") || strings.Contains(userLower, "sunao") || strings.Contains(userLower, "karo") || strings.Contains(userLower, "note") || strings.Contains(userLower, "bhejo") || strings.Contains(userLower, "bejo")))
+
+	hasPhotoKW := strings.Contains(userLower, "photo") || strings.Contains(userLower, "pic") || strings.Contains(userLower, "selfie") || strings.Contains(userLower, "picture") || strings.Contains(userLower, "tasveer") || strings.Contains(userLower, "shakal")
+	hasVoiceKW := strings.Contains(userLower, "voice") || strings.Contains(userLower, "audio") || strings.Contains(userLower, "awaaz") || strings.Contains(userLower, "awaz") || strings.Contains(userLower, "bol ke") || strings.Contains(userLower, "bolke") || strings.Contains(userLower, "speak") || strings.Contains(userLower, "sunao") || strings.Contains(userLower, "voice note")
+
+	isPhotoReq := false
+	isVoiceReq := false
+
+	if hasVoiceKW && !hasPhotoKW {
+		// Explicit voice request with no photo words -> ALWAYS VOICE_ONLY
+		isVoiceReq = true
+		exclusiveChannel = "voice_only"
+		intent = "asking_voice"
+	} else if hasPhotoKW && !hasVoiceKW {
+		// Explicit photo request with no voice words -> ALWAYS PHOTO_ONLY
+		isPhotoReq = true
+		exclusiveChannel = "photo_only"
+		intent = "asking_photo"
+	} else {
+		// Fallback to OpenJev decision
+		if exclusiveChannel == "photo_only" || intent == "asking_photo" {
+			isPhotoReq = true
+			exclusiveChannel = "photo_only"
+			intent = "asking_photo"
+		} else if exclusiveChannel == "voice_only" || intent == "asking_voice" {
+			isVoiceReq = true
+			exclusiveChannel = "voice_only"
+			intent = "asking_voice"
+		}
+	}
 
 	if isPhotoReq {
 		exclusiveChannel = "photo_only"
