@@ -356,6 +356,52 @@ func (r *historyRepo) IsMessageFromBotOrAssistant(ctx context.Context, chatID, m
 	return exists, err
 }
 
+func (r *historyRepo) CleanOldHistory(ctx context.Context, maxAge time.Duration, maxPerChat int) error {
+	// 1. Time-based retention: Delete messages older than maxAge
+	if maxAge > 0 {
+		cutoff := time.Now().Add(-maxAge).Unix()
+		tag, err := r.pool.Exec(ctx, `
+			DELETE FROM chat_history
+			WHERE created_at < $1
+		`, cutoff)
+		if err != nil {
+			return fmt.Errorf("failed to prune old chat history by age: %w", err)
+		}
+		if tag.RowsAffected() > 0 {
+			log.Printf("[Database] 🧹 Pruned %d expired chat messages older than %v", tag.RowsAffected(), maxAge)
+		}
+	}
+
+	// 2. Count-based retention: Keep only the latest maxPerChat messages per chat
+	if maxPerChat > 0 {
+		tag, err := r.pool.Exec(ctx, `
+			WITH ranked AS (
+				SELECT id, ROW_NUMBER() OVER (PARTITION BY chat_id ORDER BY created_at DESC, id DESC) as rn
+				FROM chat_history
+			)
+			DELETE FROM chat_history
+			WHERE id IN (SELECT id FROM ranked WHERE rn > $1)
+		`, maxPerChat)
+		if err != nil {
+			return fmt.Errorf("failed to prune excess chat messages by count: %w", err)
+		}
+		if tag.RowsAffected() > 0 {
+			log.Printf("[Database] 🧹 Pruned %d excess chat messages exceeding %d per chat", tag.RowsAffected(), maxPerChat)
+		}
+	}
+
+	// 3. Clean up stale ephemeral tables to prevent database quota bloat
+	// Prune mention_logs older than 48 hours
+	logCutoff := time.Now().Add(-48 * time.Hour).Unix()
+	_, _ = r.pool.Exec(ctx, `DELETE FROM mention_logs WHERE created_at < $1`, logCutoff)
+
+	// Prune captcha_sessions older than 2 hours
+	captchaCutoff := time.Now().Add(-2 * time.Hour).Unix()
+	_, _ = r.pool.Exec(ctx, `DELETE FROM captcha_sessions WHERE created_at < $1`, captchaCutoff)
+
+	return nil
+}
+
 // --- Karma Repository ---
 
 type karmaRepo struct {

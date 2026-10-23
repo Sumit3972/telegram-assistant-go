@@ -155,12 +155,51 @@ func main() {
 		}
 	}()
 
-	// 11. Graceful Shutdown on SIGINT / SIGTERM
+	// 11. Start Periodic Database Cleaner (Protects Neon DB quota by pruning stale history & sessions)
+	cleanerStop := make(chan struct{})
+	go func() {
+		retentionDays := cfg.ChatHistoryRetentionDays
+		if retentionDays <= 0 {
+			retentionDays = 7
+		}
+		maxPerChat := cfg.ChatHistoryMaxPerChat
+		if maxPerChat <= 0 {
+			maxPerChat = 100
+		}
+		maxAge := time.Duration(retentionDays) * 24 * time.Hour
+
+		// Run initial cleanup 15s after boot
+		select {
+		case <-time.After(15 * time.Second):
+			if err := historyRepo.CleanOldHistory(context.Background(), maxAge, maxPerChat); err != nil {
+				log.Printf("⚠️ Initial chat history cleanup error: %v", err)
+			}
+		case <-cleanerStop:
+			return
+		}
+
+		ticker := time.NewTicker(6 * time.Hour)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				if err := historyRepo.CleanOldHistory(context.Background(), maxAge, maxPerChat); err != nil {
+					log.Printf("⚠️ Periodic chat history cleanup error: %v", err)
+				}
+			case <-cleanerStop:
+				return
+			}
+		}
+	}()
+
+	// 12. Graceful Shutdown on SIGINT / SIGTERM
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
 	<-quit
 
 	log.Println("🛑 Shutting down gracefully...")
+	close(cleanerStop)
 	_ = srv.Stop(10 * time.Second)
 	log.Println("👋 Server stopped. Bye!")
 }

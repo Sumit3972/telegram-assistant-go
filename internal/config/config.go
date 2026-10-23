@@ -42,8 +42,10 @@ type Config struct {
 	AntigravityAccounts     string
 	CodivAPIKey           string
 
-	WorkerPoolSize        int
-	DebounceDurationMs    int
+	WorkerPoolSize           int
+	DebounceDurationMs       int
+	ChatHistoryRetentionDays int
+	ChatHistoryMaxPerChat    int
 }
 
 // Load reads the .env file (if present) and environment variables into Config.
@@ -70,6 +72,18 @@ func Load() (*Config, error) {
 	debounceMs, _ := strconv.Atoi(debounceMsStr)
 	if debounceMs <= 0 {
 		debounceMs = 5500
+	}
+
+	retentionDaysStr := getEnv("CHAT_HISTORY_RETENTION_DAYS", "7")
+	retentionDays, _ := strconv.Atoi(retentionDaysStr)
+	if retentionDays <= 0 {
+		retentionDays = 7
+	}
+
+	maxPerChatStr := getEnv("CHAT_HISTORY_MAX_PER_CHAT", "100")
+	maxPerChat, _ := strconv.Atoi(maxPerChatStr)
+	if maxPerChat <= 0 {
+		maxPerChat = 100
 	}
 
 	cfg := &Config{
@@ -104,8 +118,10 @@ func Load() (*Config, error) {
 		AntigravityAccounts:     getEnv("ANTIGRAVITY_ACCOUNTS", ""),
 		CodivAPIKey:           getEnv("CODIV_API_KEY", "sk-codiv-wXAmZjRSnKWYunGwYlTkZxhnxDSLyiPfVAzHnpeh"),
 
-		WorkerPoolSize:        workerPoolSize,
-		DebounceDurationMs:    debounceMs,
+		WorkerPoolSize:           workerPoolSize,
+		DebounceDurationMs:       debounceMs,
+		ChatHistoryRetentionDays: retentionDays,
+		ChatHistoryMaxPerChat:    maxPerChat,
 	}
 
 	if cfg.DatabaseURL == "" {
