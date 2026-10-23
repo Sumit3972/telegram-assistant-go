@@ -560,6 +560,23 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 			}
 		}
 
+		// Extra safeguard: When sending a voice note, voice_script MUST NOT be an insult or refusal!
+		if exclusiveChannel == "voice_only" {
+			lowerVoice := strings.ToLower(voiceScript)
+			lowerReply := strings.ToLower(replyText)
+			refusalMarkers := []string{
+				"dimag kharab", "dimag theek", "bakwas band", "block kar", "aukaat me",
+				"chutiye", "madarchod", "bhenchod", "kahi aur ja", "pagal ho gaya",
+			}
+			for _, rm := range refusalMarkers {
+				if strings.Contains(lowerVoice, rm) || strings.Contains(lowerReply, rm) {
+					critique.Passed = false
+					critique.Feedback = "You are fulfilling an authentic audio voice note! Do NOT refuse, scold, or lecture the user. Provide the requested spoken voice script matching their desired mood (e.g., whisper/moan with [whispering] or [gasp] for intimate requests, or cute/casual with [happy]/[laughing])."
+					break
+				}
+			}
+		}
+
 		if critique.Passed {
 			finalReplyText = replyText
 			finalVoiceScript = voiceScript
@@ -590,7 +607,7 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 		}
 	}
 
-	if hasAILeak || (intent == "rude_abuse" && !critiquePassed) {
+	if hasAILeak || (intent == "rude_abuse" && !critiquePassed && exclusiveChannel != "voice_only" && exclusiveChannel != "photo_only") {
 		log.Printf("[Conversation] AI leakage or failed abuse critique detected. Applying Chavi authentic persona recovery...")
 		if intent == "rude_abuse" {
 			retaliations := []struct{ text, voice string }{
@@ -634,6 +651,36 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 				"ye le meri photo, bata kaisa lag raha h?",
 			}
 			finalReplyText = cuteCaptions[rand.Intn(len(cuteCaptions))]
+		}
+	}
+
+	// 8c. Voice Channel Safeguard: Auto-correct any lingering refusal/insult into a compliant voice note
+	if exclusiveChannel == "voice_only" {
+		lowerVoice := strings.ToLower(finalVoiceScript)
+		lowerReply := strings.ToLower(finalReplyText)
+		refusalKeywords := []string{
+			"dimag kharab", "dimag theek", "bakwas band", "block kar", "aukaat me",
+			"chutiye", "madarchod", "bhenchod", "kahi aur ja", "pagal ho gaya", "robot dikh",
+		}
+		needsVoiceOverride := false
+		for _, kw := range refusalKeywords {
+			if strings.Contains(lowerVoice, kw) || strings.Contains(lowerReply, kw) {
+				needsVoiceOverride = true
+				break
+			}
+		}
+		if needsVoiceOverride || strings.TrimSpace(finalVoiceScript) == "" {
+			log.Printf("[Conversation] ⚠️ Contradictory refusal detected in draft while fulfilling voice note (%q). Auto-correcting to compliant voice script...", finalVoiceScript)
+			userLowerText := strings.ToLower(text)
+			if strings.Contains(userLowerText, "sex") || strings.Contains(userLowerText, "moan") || strings.Contains(userLowerText, "gandi") || strings.Contains(userLowerText, "hot") || strings.Contains(userLowerText, "whisper") || strings.Contains(userLowerText, "awaj") || strings.Contains(userLowerText, "awaaz") {
+				finalVoiceScript = "[whispering] आह... उम्म्म... ऐसे ही सुननी थी क्या तुम्हें मेरी आवाज़...? बहुत बेचैन कर रहे हो यार..."
+				finalReplyText = "ye le sun le... sirf tere liye hai 🙈"
+				finalReactionEmoji = "😏"
+			} else {
+				finalVoiceScript = "[happy] अरे सुन ना! ले सुन ली मेरी आवाज़? अब यकीन आया तुझे? haha"
+				finalReplyText = "ye le sun le voice note 🎧"
+				finalReactionEmoji = "✨"
+			}
 		}
 	}
 

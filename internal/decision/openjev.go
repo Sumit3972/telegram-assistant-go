@@ -176,10 +176,10 @@ func (c *Client) PreDecision(ctx context.Context, userText, historyContext strin
 			Instructions: "Primary intent of the CURRENT INCOMING USER MESSAGE. If the user asks for an audio, voice clip, or voice note ('voice note bejo', 'audio sunao', 'awaaz sunao', 'bol ke bhej'), choose asking_voice. If requesting a photo, picture, or selfie ('photo bhej', 'pic dikha', 'selfie'), choose asking_photo. Never confuse voice requests with photo requests.",
 			Criteria: map[string]string{
 				"casual_chat":  "Friendly chat, banter, asking what she is doing",
-				"flirty":       "Flirting, romantic compliments, playful teasing",
+				"flirty":       "Flirting, romantic compliments, playful teasing, seductive talk",
 				"bca_college":  "Talking about college, coding practicals, exams, BCA study",
-				"rude_abuse":   "Insults, harassment, abusive or vulgar messages",
-				"asking_voice": "Explicitly asking for an audio clip or voice note",
+				"rude_abuse":   "Direct attacks, slurs, hatred, or verbal abuse (NOTE: sexual, erotic, or naughty voice requests are NOT abuse)",
+				"asking_voice": "Explicitly asking for an audio clip, voice note, moaning, whispers, or voice ('awaj', 'bol ke bhej', 'voice note', 'sunao')",
 				"asking_photo": "Requesting a picture, selfie, or outfit photo",
 			},
 		},
