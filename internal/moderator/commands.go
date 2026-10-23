@@ -355,6 +355,39 @@ func (h *CommandHandler) HandleCommand(ctx context.Context, msg *domain.Telegram
 		_, _ = h.botClient.SendMessage(ctx, msg.Chat.ID, "Not enough active members in chat history to generate a ship!", telegram.SendMessageOptions{ReplyToID: msg.MessageID})
 		return true
 
+	case "/poll":
+		rawArgs := strings.TrimSpace(strings.TrimPrefix(text, parts[0]))
+		if rawArgs == "" {
+			_, _ = h.botClient.SendMessage(ctx, msg.Chat.ID, "Usage: <code>/poll Question? | Option 1 | Option 2 [| Option 3...]</code>", telegram.SendMessageOptions{ParseMode: "HTML", ReplyToID: msg.MessageID})
+			return true
+		}
+
+		pollParts := strings.Split(rawArgs, "|")
+		if len(pollParts) < 3 {
+			_, _ = h.botClient.SendMessage(ctx, msg.Chat.ID, "❌ Poll requires a question and at least 2 options separated by '|'. Example: <code>/poll Chai ya Coffee? | Chai ☕ | Coffee 🧋</code>", telegram.SendMessageOptions{ParseMode: "HTML", ReplyToID: msg.MessageID})
+			return true
+		}
+
+		question := strings.TrimSpace(pollParts[0])
+		var options []string
+		for _, opt := range pollParts[1:] {
+			trimmed := strings.TrimSpace(opt)
+			if trimmed != "" {
+				options = append(options, trimmed)
+			}
+		}
+
+		if len(options) < 2 {
+			_, _ = h.botClient.SendMessage(ctx, msg.Chat.ID, "❌ Poll requires at least 2 valid options.", telegram.SendMessageOptions{ReplyToID: msg.MessageID})
+			return true
+		}
+
+		_, err := h.botClient.SendPoll(ctx, msg.Chat.ID, question, options, false, false, msg.MessageID)
+		if err != nil {
+			_, _ = h.botClient.SendMessage(ctx, msg.Chat.ID, fmt.Sprintf("Failed to create poll: %v", err), telegram.SendMessageOptions{ReplyToID: msg.MessageID})
+		}
+		return true
+
 	case "/help":
 		botLabel := h.botName
 		if botLabel == "" {
@@ -368,6 +401,7 @@ func (h *CommandHandler) HandleCommand(ctx context.Context, msg *domain.Telegram
 • <code>/topkarma</code> - View karma leaderboard
 • <code>/summarize</code> - AI summary of recent chat
 • <code>/ship</code> - Generate daily couple of the day
+• <code>/poll Question | Opt1 | Opt2</code> - Create interactive poll
 
 <b>Admin Commands:</b>
 • <code>/warn @user [reason]</code> - Warn user (3 warnings = auto-ban)
@@ -379,7 +413,7 @@ func (h *CommandHandler) HandleCommand(ctx context.Context, msg *domain.Telegram
 • <code>/setrules [rules]</code> - Update group rules
 • <code>/purge [number]</code> - Delete recent messages
 
-💡 <i>You can also mention @%s naturally in chat or ask for selfies and voice notes!</i>`, botLabel, botLabel)
+💡 <i>You can also mention @%s naturally in chat or ask for selfies, polls, and voice notes!</i>`, botLabel, botLabel)
 		_, _ = h.botClient.SendMessage(ctx, msg.Chat.ID, helpText, telegram.SendMessageOptions{ParseMode: "HTML", ReplyToID: msg.MessageID})
 		return true
 	}

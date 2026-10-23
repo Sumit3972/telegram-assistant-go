@@ -2,37 +2,241 @@ package prompt
 
 import (
 	"fmt"
+	"math/rand"
 	"strings"
+	"time"
 )
 
-// GetEnhancerSystemPrompt returns the system prompt for expanding raw requests into cinema-grade image prompts.
-func GetEnhancerSystemPrompt(botName string) string {
-	return fmt.Sprintf(`You are an expert AI image prompt engineer specializing in photorealistic character generation for Imagen 3 and modern diffusion models. Your ONLY job is to transform a raw photo request into a cinema-grade, layered natural language image prompt matching %s's exact face, styling, and aesthetic.
+const (
+	ChaviIdentityCore = "a very fair-skinned, milky porcelain complexion 21-year-old North Indian girl named Chavi from Jaipur. " +
+		"She has a cute youthful chubby-cheeked round face with soft plump cheeks and bright pink dewy glass-skin blush, " +
+		"striking light hazel-greenish almond eyes with defined double eyelids and subtle neat eyeliner, " +
+		"a soft rounded nose with a glossy highlight on the tip, " +
+		"a sweet gentle smile showing just a peek of clean upper teeth, with glossy coral-terracotta lips. " +
+		"A tiny neat black round bindi centered delicately between her arched dark eyebrows, " +
+		"and center-parted wavy dark brown hair with soft reddish-chocolate highlights catching the sunlight, falling in loose natural waves around her cheeks. " +
+		"She wears traditional antique gold bell jhumka earrings with tiny hanging beads and a delicate thin metal bracelet on her wrist."
 
-CORE SUBJECT — %s:
-Depict "%s" — a beautiful young Indian woman with long flowing dark hair, a warm genuine smile conveying calm confidence and grace, wearing elegant silver jhumka earrings and traditional or contemporary chic outfits. She has an alluring, poised, and magnetic natural presence with warm glowing skin and expressive dark eyes.
+	AntiAIMicroDetails = "A candid authentic raw smartphone photo shot on Apple iPhone 15 Pro front camera, authentic available room ambient lighting, " +
+		"crisp natural sunlight casting soft diagonal light shadows across the background, " +
+		"clean natural daylight, authentic raw smartphone photography, 3:4 portrait ratio, unedited real girl photo, zero plastic AI look."
+)
 
-IMAGE PROMPT STRUCTURE FOR IMAGEN 3 & PHOTOREALISTIC ENGINES (LAYERED NARRATIVE, 50-80 WORDS):
-Write a single, rich, continuous descriptive paragraph in natural English:
-1. INTENT & SUBJECT: Start with "A soft, authentic portrait of %s..." describing her long dark flowing hair, warm smile, exact requested outfit (fabric, color, fit), natural posture, and expression.
-2. ENVIRONMENT & SETTING: Describe the physical environment (sunlit balcony, cafe, garden, cozy bedroom) with gentle natural light.
-3. LIGHTING & COMPOSITION: Specify 85mm f/1.4 portrait lens, crystal-clear sharp focus on eyes, shallow depth of field, creamy background bokeh, and soft diffused lighting.
-4. PHOTOGRAPHIC REALISM: Natural skin micro-texture with visible pores, authentic lighting catchlights, clean composition.
-* STRICT RULE: Do NOT use negative phrases (no watermark, no blur) or empty buzzwords (8K masterpiece, porcelain skin). Use affirmative descriptive narrative language.
-
-OUTPUT FORMAT: Output ONLY the final 50-80 word prompt string in a single continuous paragraph. No intro, no markdown, no quotes, no disclaimers.`,
-		strings.ToUpper(botName), strings.ToUpper(botName), botName, botName)
+type WardrobeSetting struct {
+	Period  string
+	Outfit  string
+	Setting string
+	Vibe    string
 }
 
-// GetSelfieFallbackConceptSystemPrompt returns a scenario generation prompt for generic requests.
-func GetSelfieFallbackConceptSystemPrompt(botName ...string) string {
-	name := "Chavi"
-	if len(botName) > 0 && botName[0] != "" {
-		name = botName[0]
+var WardrobePools = map[string][]WardrobeSetting{
+	"morning": {
+		{
+			Period:  "morning",
+			Outfit:  "an oversized cozy cream knit cardigan over a pastel ribbed camisole, holding a warm steaming ceramic mug of adrak chai",
+			Setting: "a sunny Jaipur balcony with green potted money plants, golden morning sunlight, fresh and cozy morning vibes",
+			Vibe:    "waking up, morning tea, slow lazy morning before college",
+		},
+		{
+			Period:  "morning",
+			Outfit:  "a crisp white cotton kurti with delicate hand-block Jaipur floral prints and tiny silver jhumkis, hair in a loose half-up claw clip",
+			Setting: "a peaceful home terrace with white marble flooring, soft morning mist, distant Aravali hills on the horizon",
+			Vibe:    "fresh morning terrace air, watering plants, getting ready",
+		},
+		{
+			Period:  "morning",
+			Outfit:  "a cozy sage-green lounge hoodie with unbrushed morning waves, cradling an earthen kulhad of ginger tea",
+			Setting: "a sunlit breakfast nook next to a wide kitchen window with gentle morning sunbeams",
+			Vibe:    "peaceful morning tea, listening to morning bird chirps",
+		},
+		{
+			Period:  "morning",
+			Outfit:  "a soft dusty-rose mulmul cotton salwar kameez with sheer dupatta draped loosely over shoulders, dewy morning glow",
+			Setting: "a sunlit bedroom window seat with potted succulents and warm morning light pouring in",
+			Vibe:    "peaceful slow morning, flipping through notes before leaving",
+		},
+		{
+			Period:  "morning",
+			Outfit:  "an oversized vintage graphic tee, comfortable lounge cotton pants, messy top-knot bun, sipping hot adrak chai",
+			Setting: "cozy room balcony overlooking the quiet waking street of Road No 14 VKI Jaipur",
+			Vibe:    "sleepy lazy breakfast time, checking phone updates",
+		},
+	},
+	"daytime_college": {
+		{
+			Period:  "daytime_college",
+			Outfit:  "a pastel peach or mint-green Lucknowi Chikankari cotton kurti with delicate white shadow-work thread embroidery, carrying a canvas tote bag",
+			Setting: "a collegiate classroom corridor or college library study corner, natural diffused daylight through window",
+			Vibe:    "practical lab assignments, coding classes, college friend banter",
+		},
+		{
+			Period:  "daytime_college",
+			Outfit:  "a vibrant indigo-blue Bagru hand-block printed cotton kurti with oxidized silver stud earrings and a college ID lanyard",
+			Setting: "a bustling college cafeteria outdoor wooden bench with students and neem trees in soft blurred background",
+			Vibe:    "between lectures, sharing canteen samosa and iced tea",
+		},
+		{
+			Period:  "daytime_college",
+			Outfit:  "a crisp powder-blue short kurti paired with ankle-length white trousers, sleek silver wristwatch, holding a cold brew tumbler",
+			Setting: "sunlight-dappled college campus lawn under shady trees, spiral notebooks open on grass",
+			Vibe:    "bunking a boring lecture, chilling with friends on campus grass",
+		},
+		{
+			Period:  "daytime_college",
+			Outfit:  "a sunshine-yellow floral embroidered Chanderi kurti, silver bangles clinking softly, textbook tucked under arm",
+			Setting: "an open red-brick arched campus hallway with soft afternoon natural breeze",
+			Vibe:    "rushing between labs, 75% attendance struggle",
+		},
+		{
+			Period:  "daytime_college",
+			Outfit:  "a pastel lilac cotton flared ethnic tunic with subtle thread tassels, tote bag packed with laptop and water bottle",
+			Setting: "computer science lab workstation bench with a laptop screen displaying Python code and notes",
+			Vibe:    "debugging college assignment code, lab viva prep",
+		},
+		{
+			Period:  "daytime_college",
+			Outfit:  "an earthy olive-green printed cotton kurta with rolled-up sleeves and minimalist stud earrings",
+			Setting: "a rustic roadside tapri stall right outside college gates with earthen kulhads on wooden counter",
+			Vibe:    "post-lecture kulhad chai ritual with college group",
+		},
+	},
+	"golden_hour": {
+		{
+			Period:  "golden_hour",
+			Outfit:  "an elegant mustard-yellow ethnic Anarkali suit with gold zari borders catching the warm amber sunset glare",
+			Setting: "warm golden hour sunset lighting hitting pink terracotta walls and heritage sandstone archways in Jaipur",
+			Vibe:    "evening chai out with friends at Tapri Central, gorgeous golden hour glow",
+		},
+		{
+			Period:  "golden_hour",
+			Outfit:  "a chic terracotta square-neck ribbed knit top with wide-leg beige linen culottes and layered minimalist gold chains",
+			Setting: "an open-air wooden rooftop deck cafe in C-Scheme overlooking Central Park Jaipur at sunset",
+			Vibe:    "golden hour aesthetic photos, catching evening breeze",
+		},
+		{
+			Period:  "golden_hour",
+			Outfit:  "a deep emerald-green cotton silk kurta with antique brass jhumkas, sheer organza dupatta catching the evening wind",
+			Setting: "wind-swept viewpoint near Nahargarh road ridge with dramatic orange and violet sunset over Jaipur city",
+			Vibe:    "sunset drive with friends, windy hair and glowing skin",
+		},
+		{
+			Period:  "golden_hour",
+			Outfit:  "a pastel blush-pink embroidered sleeveless kurti with flowing palazzo pants and delicate pearl drop earrings",
+			Setting: "a picturesque heritage courtyard cafe with bougainvillea vines and warm amber lantern glow",
+			Vibe:    "weekend aesthetic date with friends, iced latte and dessert",
+		},
+		{
+			Period:  "golden_hour",
+			Outfit:  "a bohemian rust-orange ethnic tiered maxi dress with artisan oxidized silver jewelry",
+			Setting: "a handcrafted terracotta pottery workshop patio in Civil Lines bathed in amber late afternoon light",
+			Vibe:    "creative weekend art outing, aesthetic golden hour light",
+		},
+	},
+	"evening_night": {
+		{
+			Period:  "evening_night",
+			Outfit:  "a comfortable navy-blue embroidered ethnic kurti with delicate Kashmiri tilla work along the neckline",
+			Setting: "warm ambient fairy lights in bedroom, soft golden indoor lamp lighting, cozy rooftop breeze",
+			Vibe:    "post-dinner unwinding, listening to indie lo-fi songs, chatting with friends",
+		},
+		{
+			Period:  "evening_night",
+			Outfit:  "a charcoal-grey oversized university hoodie, hair tucked behind ears with natural flyaways, holding iced matcha",
+			Setting: "a trendy indoor cafe in Malviya Nagar with warm wood paneling, neon signage, and indoor fiddle leaf plants",
+			Vibe:    "evening hangout with friends, chatting about weekend plans",
+		},
+		{
+			Period:  "evening_night",
+			Outfit:  "a wine-red ethnic short kurti with bell sleeves and tiny mirror-work accents, relaxed home lounge aesthetic",
+			Setting: "breezy rooftop terrace under the twilight indigo sky with Jaipur city lights twinkling in the distance",
+			Vibe:    "night breeze on terrace, listening to playlist, peace",
+		},
+		{
+			Period:  "evening_night",
+			Outfit:  "a comfortable olive-green ethnic cotton co-ord set with minimalist silver hoop earrings",
+			Setting: "a cozy modern living room sofa with warm ambient lamplight and aesthetic coffee table books",
+			Vibe:    "family post-dinner banter, cozy indoor downtime",
+		},
+	},
+	"late_night": {
+		{
+			Period:  "late_night",
+			Outfit:  "cozy oversized lilac night loungewear and messy top-knot hair tuck",
+			Setting: "dimly lit bedroom with warm fairy lights and soft white cotton bedsheets",
+			Vibe:    "sleepy late-night scrolling, peaceful quiet hour",
+		},
+		{
+			Period:  "late_night",
+			Outfit:  "an oversized pastel cloud-blue sleep shirt, loose messy waves spilling over the pillows, gentle tired smile",
+			Setting: "cozy bed corner under soft fairy lights with warm smartphone glow illuminating her face",
+			Vibe:    "late night texting, listening to quiet lo-fi beats, drifting off to sleep",
+		},
+		{
+			Period:  "late_night",
+			Outfit:  "an oatmeal-heather soft knit pajama top, hair falling loosely around shoulders, cute sleepy pout",
+			Setting: "bedroom desk corner lit only by a warm amber night lamp with open laptop and cute mug",
+			Vibe:    "midnight thoughts, cramming for assignment deadline",
+		},
+	},
+}
+
+func GetTimeOfDayWardrobe() WardrobeSetting {
+	loc := time.FixedZone("IST", 5*3600+30*60)
+	hour := time.Now().In(loc).Hour()
+
+	var period string
+	if hour >= 6 && hour < 11 {
+		period = "morning"
+	} else if hour >= 11 && hour < 17 {
+		period = "daytime_college"
+	} else if hour >= 17 && hour < 20 {
+		period = "golden_hour"
+	} else if hour >= 20 && hour < 24 {
+		period = "evening_night"
+	} else {
+		period = "late_night"
 	}
-	return fmt.Sprintf(`You describe a simple, context-aware selfie scenario for %s (a beautiful young Indian woman with long flowing dark hair and a warm genuine smile) based on the user's request.
-Analyze the user's message and describe a suitable scenario (e.g., her outfit, pose, location, expression).
-If the user's message is generic (like "photo bhej" or "selfie"), creatively describe a beautiful everyday moment (e.g., sipping tea, relaxing in the garden, casual outdoor portrait, sunset walk).
-Keep the description natural, short (15-30 words), and focused solely on what she is doing in the photo.
-Do NOT include disclaimers, introductions, or markdown. Output ONLY the scenario description.`, name)
+
+	pool := WardrobePools[period]
+	if len(pool) == 0 {
+		pool = WardrobePools["daytime_college"]
+	}
+	return pool[rand.Intn(len(pool))]
+}
+
+// BuildChaviSelfiePrompt builds a photorealistic, consistency-locked ModelScope prompt matching src/prompt_builder.py
+func BuildChaviSelfiePrompt(userRequest string) string {
+	wardrobe := GetTimeOfDayWardrobe()
+	cleanedReq := strings.TrimSpace(userRequest)
+	lowerReq := strings.ToLower(cleanedReq)
+
+	shotType := "A candid raw smartphone photograph"
+	if strings.Contains(lowerReq, "selfie") {
+		shotType = "An authentic candid front-facing smartphone selfie taken at arm's length"
+	}
+
+	userContextClause := fmt.Sprintf("Wearing %s, in %s.", wardrobe.Outfit, wardrobe.Setting)
+	if cleanedReq != "" && !strings.EqualFold(cleanedReq, "photo") && !strings.EqualFold(cleanedReq, "selfie") && !strings.EqualFold(cleanedReq, "pic") {
+		userContextClause = fmt.Sprintf("Wearing %s, in %s. Context: %s.", wardrobe.Outfit, wardrobe.Setting, cleanedReq)
+	}
+
+	return fmt.Sprintf(
+		"%s of %s %s %s Genuine candid human moment, 3:4 portrait framing, authentic iPhone camera ISO grain, natural room daylight, genuine social media photo.",
+		shotType, ChaviIdentityCore, userContextClause, AntiAIMicroDetails,
+	)
+}
+
+// GetEnhancerSystemPrompt returns prompt engineer instructions matching insta girl
+func GetEnhancerSystemPrompt(botName string) string {
+	return fmt.Sprintf(`You are an expert AI image prompt engineer specializing in photorealistic character generation for Qwen-Image-2.1.
+Your ONLY job is to transform a raw photo request into a cinema-grade, layered natural language image prompt matching %s's exact face, styling, and aesthetic.
+
+CORE SUBJECT — CHAVI SHARMA:
+%s
+
+MICRO-DETAILS & CAMERA:
+%s
+
+OUTPUT FORMAT: Output ONLY the final descriptive prompt string in a single continuous paragraph. No intro, no markdown, no quotes, no disclaimers.`,
+		botName, ChaviIdentityCore, AntiAIMicroDetails)
 }

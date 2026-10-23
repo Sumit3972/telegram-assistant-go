@@ -46,6 +46,38 @@ func GetConversationTools() []domain.ToolDefinition {
 				},
 			},
 		},
+		{
+			Type: "function",
+			Function: domain.ToolFunctionDefinition{
+				Name:        "create_poll",
+				Description: "Creates an interactive Telegram poll in the chat. Call this when the user asks for a poll, or asks the group/chat to vote or decide between multiple options (e.g. Chai vs Coffee, weekend plans, movie choices).",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"question": map[string]any{
+							"type":        "string",
+							"description": "The poll question to ask (1-300 characters).",
+						},
+						"options": map[string]any{
+							"type": "array",
+							"items": map[string]any{
+								"type": "string",
+							},
+							"description": "List of 2 to 10 poll options.",
+						},
+						"is_anonymous": map[string]any{
+							"type":        "boolean",
+							"description": "Whether votes should be anonymous (default false for social group fun).",
+						},
+						"allows_multiple_answers": map[string]any{
+							"type":        "boolean",
+							"description": "Whether voters can choose multiple options.",
+						},
+					},
+					"required": []string{"question", "options"},
+				},
+			},
+		},
 	}
 }
 

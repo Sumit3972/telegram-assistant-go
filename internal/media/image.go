@@ -3,7 +3,6 @@ package media
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,29 +12,32 @@ import (
 	"time"
 
 	"telegram-ai-assistant/internal/ai/antigravity"
+	"telegram-ai-assistant/internal/prompt"
 )
 
 type ImageService struct {
-	apiURL       string
-	apiKey       string
-	primaryModel string
-	httpClient   *http.Client
-	antigravity  *antigravity.Client
+	modelScopeAPIKey string
+	modelScopeAPIURL string
+	modelScopeModel  string
+	httpClient       *http.Client
+	antigravity      *antigravity.Client
 }
 
-func NewImageService(apiURL, apiKey string, primaryModel ...string) *ImageService {
-	if apiURL == "" {
-		apiURL = "https://api.futureppo.top/v1/images/generations"
+func NewImageService(apiKey, apiURL, model string) *ImageService {
+	if apiKey == "" {
+		apiKey = "ms-b651c584-6b06-482f-90c7-b8fe50fd516c"
 	}
-	model := "agnes-image-2.5-flash"
-	if len(primaryModel) > 0 && primaryModel[0] != "" {
-		model = primaryModel[0]
+	if apiURL == "" {
+		apiURL = "https://api-inference.modelscope.ai/v1"
+	}
+	if model == "" {
+		model = "Qwen/Qwen-Image-2.1"
 	}
 	return &ImageService{
-		apiURL:       apiURL,
-		apiKey:       apiKey,
-		primaryModel: model,
-		httpClient:   &http.Client{Timeout: 300 * time.Second},
+		modelScopeAPIKey: apiKey,
+		modelScopeAPIURL: strings.TrimRight(apiURL, "/"),
+		modelScopeModel:  model,
+		httpClient:       &http.Client{Timeout: 120 * time.Second},
 	}
 }
 
@@ -49,52 +51,214 @@ type GeneratedImage struct {
 	URL         string
 }
 
-func sanitizePromptForModel(model, rawPrompt string) string {
-	clean := strings.TrimSpace(rawPrompt)
-
-	// Remove negative prompt artifacts that harm Grok/Flux/Imagen image models
-	negatives := []string{
-		", zero watermark", ", no watermark", ", no distortion", ", no blur", "no watermark", "zero watermark",
-	}
-	for _, neg := range negatives {
-		clean = replaceCaseInsensitive(clean, neg, "")
+// GenerateImage generates a 3:4 photorealistic portrait of Chavi Sharma via ModelScope Qwen-Image-2.1
+// Matches src/image_service.py: up to 2 request attempts, 300s (5m) initial timeout with auto 5m extension for running tasks.
+func (s *ImageService) GenerateImage(ctx context.Context, userRequestOrPrompt string) (*GeneratedImage, error) {
+	// Construct the canonical prompt if raw request passed
+	finalPrompt := userRequestOrPrompt
+	if !strings.Contains(userRequestOrPrompt, prompt.ChaviIdentityCore) {
+		finalPrompt = prompt.BuildChaviSelfiePrompt(userRequestOrPrompt)
 	}
 
-	// Strictly limit prompt length for models with character limits
-	maxLen := 4000
-	if strings.Contains(strings.ToLower(model), "z-image") {
-		maxLen = 1000
-	}
-
-	if len(clean) > maxLen {
-		// Cleanly truncate at last comma or period within maxLen
-		truncated := clean[:maxLen]
-		if lastIdx := strings.LastIndexAny(truncated, ",.;"); lastIdx > maxLen-150 {
-			clean = strings.TrimSpace(truncated[:lastIdx])
+	const maxRequestAttempts = 2
+	for reqAttempt := 1; reqAttempt <= maxRequestAttempts; reqAttempt++ {
+		if reqAttempt > 1 {
+			log.Printf("[ImageService:ModelScope] 🔄 Raising a NEW image generation request to ModelScope (Attempt %d/%d)...", reqAttempt, maxRequestAttempts)
 		} else {
-			clean = strings.TrimSpace(truncated)
+			log.Printf("[ImageService:ModelScope] Submitting task (%s, 768x1024, promptLen=%d)...", s.modelScopeModel, len(finalPrompt))
 		}
-	}
 
-	return strings.TrimSpace(clean)
-}
-
-func replaceCaseInsensitive(str, substr, repl string) string {
-	for {
-		idx := strings.Index(strings.ToLower(str), strings.ToLower(substr))
-		if idx == -1 {
+		// 1. Submit async task to ModelScope
+		taskID, err := s.submitModelScopeTask(ctx, finalPrompt)
+		if err != nil {
+			log.Printf("[ImageService:ModelScope] Task submission failed (attempt %d/%d): %v", reqAttempt, maxRequestAttempts, err)
+			if reqAttempt < maxRequestAttempts {
+				time.Sleep(3 * time.Second)
+				continue
+			}
 			break
 		}
-		str = str[:idx] + repl + str[idx+len(substr):]
+
+		log.Printf("[ImageService:ModelScope] Task ID: %s. Polling for completion (up to 300s with auto 5-min extension if running)...", taskID)
+
+		// 2. Poll task until SUCCEED (300s initial with 300s auto-extension)
+		imgBytes, imgURL, err := s.pollModelScopeTask(ctx, taskID, 300*time.Second, true)
+		if err == nil && (len(imgBytes) > 0 || imgURL != "") {
+			log.Printf("[ImageService:ModelScope] ✅ Successfully obtained image (%d bytes)", len(imgBytes))
+			return &GeneratedImage{
+				Data:        imgBytes,
+				ContentType: "image/jpeg",
+				URL:         imgURL,
+			}, nil
+		}
+
+		log.Printf("[ImageService:ModelScope] Task %s did not yield an image (%v).", taskID, err)
+		if reqAttempt < maxRequestAttempts {
+			time.Sleep(3 * time.Second)
+			continue
+		}
 	}
-	return str
+
+	log.Printf("[ImageService:ModelScope] ❌ All %d request attempts exhausted. Falling back to Antigravity...", maxRequestAttempts)
+	return s.fallbackAntigravity(ctx, finalPrompt)
 }
 
-func (s *ImageService) GenerateImage(ctx context.Context, prompt string) (*GeneratedImage, error) {
-	// 1. Try Antigravity Imagen 3 first if configured
+func (s *ImageService) submitModelScopeTask(ctx context.Context, promptText string) (string, error) {
+	url := fmt.Sprintf("%s/images/generations", s.modelScopeAPIURL)
+
+	payload := map[string]interface{}{
+		"model":  s.modelScopeModel,
+		"prompt": promptText,
+		"size":   "768x1024", // 3:4 portrait for Telegram
+	}
+
+	bodyBytes, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return "", err
+	}
+
+	req.Header.Set("Authorization", "Bearer "+s.modelScopeAPIKey)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-ModelScope-Async-Mode", "true")
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	respBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBytes))
+	}
+
+	var res struct {
+		TaskID     string `json:"task_id"`
+		TaskStatus string `json:"task_status"`
+		Errors     *struct {
+			Message string `json:"message"`
+		} `json:"errors,omitempty"`
+	}
+
+	if err := json.Unmarshal(respBytes, &res); err != nil {
+		return "", fmt.Errorf("unmarshal error: %w (body: %s)", err, string(respBytes))
+	}
+
+	if res.Errors != nil && res.Errors.Message != "" {
+		return "", fmt.Errorf("ModelScope error: %s", res.Errors.Message)
+	}
+
+	if res.TaskID == "" {
+		return "", fmt.Errorf("no task_id returned: %s", string(respBytes))
+	}
+
+	return res.TaskID, nil
+}
+
+func (s *ImageService) pollModelScopeTask(ctx context.Context, taskID string, initialTimeout time.Duration, allowExtension bool) ([]byte, string, error) {
+	pollURL := fmt.Sprintf("%s/tasks/%s", s.modelScopeAPIURL, taskID)
+	start := time.Now()
+	pollInterval := 4 * time.Second
+
+	currentLimit := initialTimeout
+	extended := false
+	attempt := 0
+
+	for time.Since(start) < currentLimit {
+		attempt++
+		select {
+		case <-ctx.Done():
+			return nil, "", ctx.Err()
+		case <-time.After(pollInterval):
+		}
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, pollURL, nil)
+		if err != nil {
+			continue
+		}
+		req.Header.Set("Authorization", "Bearer "+s.modelScopeAPIKey)
+		req.Header.Set("X-ModelScope-Task-Type", "image_generation")
+
+		resp, err := s.httpClient.Do(req)
+		if err != nil {
+			log.Printf("[ImageService:ModelScope] Poll network glitch: %v", err)
+			continue
+		}
+
+		bodyBytes, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			continue
+		}
+
+		var pollData struct {
+			TaskStatus   string   `json:"task_status"`
+			OutputImages []string `json:"output_images"`
+			Errors       *struct {
+				Message string `json:"message"`
+			} `json:"errors,omitempty"`
+		}
+
+		if err := json.Unmarshal(bodyBytes, &pollData); err != nil {
+			continue
+		}
+
+		elapsed := int(time.Since(start).Seconds())
+		if attempt%5 == 0 || pollData.TaskStatus == "SUCCEED" {
+			log.Printf("[ImageService:ModelScope] Poll attempt %d (%ds / %ds): status = %s",
+				attempt, elapsed, int(currentLimit.Seconds()), pollData.TaskStatus)
+		}
+
+		if pollData.TaskStatus == "SUCCEED" {
+			if len(pollData.OutputImages) == 0 {
+				return nil, "", fmt.Errorf("task succeeded but output_images array is empty")
+			}
+			imgURL := pollData.OutputImages[0]
+			log.Printf("[ImageService:ModelScope] Success! Downloading generated image to memory from %s...", imgURL)
+			data, err := s.downloadImage(ctx, imgURL)
+			if err != nil {
+				return nil, imgURL, nil
+			}
+			return data, imgURL, nil
+		}
+
+		if pollData.TaskStatus == "FAILED" || pollData.TaskStatus == "CANCELLED" {
+			errMsg := "unknown failure"
+			if pollData.Errors != nil && pollData.Errors.Message != "" {
+				errMsg = pollData.Errors.Message
+			}
+			return nil, "", fmt.Errorf("task %s failed: %s", taskID, errMsg)
+		}
+
+		// Auto-extend by 5 minutes if still actively running after initial timeout
+		if !extended && allowExtension && time.Since(start) >= initialTimeout {
+			status := pollData.TaskStatus
+			if status == "RUNNING" || status == "PENDING" || status == "PROCESSING" {
+				log.Printf("[ImageService:ModelScope] ⏳ Task %s is still %s after %ds. Extending polling for another 5 minutes (up to %ds total with same task ID)...",
+					taskID, status, int(initialTimeout.Seconds()), int((initialTimeout+300*time.Second).Seconds()))
+				currentLimit = initialTimeout + 300*time.Second
+				extended = true
+			}
+		}
+	}
+
+	elapsedTotal := int(time.Since(start).Seconds())
+	return nil, "", fmt.Errorf("timed out after %d seconds waiting for task %s", elapsedTotal, taskID)
+}
+
+func (s *ImageService) fallbackAntigravity(ctx context.Context, promptText string) (*GeneratedImage, error) {
 	if s.antigravity != nil && s.antigravity.IsConfigured() {
-		log.Printf("[ImageService] Attempting generation with Antigravity Imagen 3 (gemini-3.1-flash-image)...")
-		imgBytes, err := s.antigravity.GenerateImage(ctx, prompt)
+		log.Printf("[ImageService] ModelScope failed. Attempting fallback via Antigravity Imagen 3...")
+		imgBytes, err := s.antigravity.GenerateImage(ctx, promptText)
 		if err == nil && len(imgBytes) > 0 {
 			log.Printf("[ImageService] Successfully generated %d byte JPEG via Antigravity Imagen 3!", len(imgBytes))
 			return &GeneratedImage{
@@ -102,140 +266,8 @@ func (s *ImageService) GenerateImage(ctx context.Context, prompt string) (*Gener
 				ContentType: "image/jpeg",
 			}, nil
 		}
-		log.Printf("[ImageService] Antigravity Imagen 3 failed: %v. Falling back to candidate pool...", err)
 	}
-
-	primary := s.primaryModel
-	if primary == "" {
-		primary = "agnes-image-2.5-flash"
-	}
-
-	models := []string{primary}
-	fallbacks := []string{
-		"agnes-image-2.5-flash",
-		"agnes-image-2.1-flash",
-		"agnes-image-2.0-flash",
-		"grok-imagine-image-lite",
-		"grok-imagine-image",
-		"grok-imagine-image-quality-lite",
-	}
-	for _, m := range fallbacks {
-		if m != primary {
-			models = append(models, m)
-		}
-	}
-
-	var lastErr error
-	for i, model := range models {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-
-		modelPrompt := sanitizePromptForModel(model, prompt)
-		log.Printf("[ImageService] Generating image via %s (attempt %d/%d, promptLen=%d)...", model, i+1, len(models), len(modelPrompt))
-
-		reqBody := map[string]any{
-			"model":           model,
-			"prompt":          modelPrompt,
-			"n":               1,
-			"size":            "1024x1024",
-			"response_format": "b64_json",
-		}
-
-		bodyBytes, _ := json.Marshal(reqBody)
-
-		// Enforce a strict 200-second timeout per model attempt
-		attemptCtx, cancel := context.WithTimeout(ctx, 200*time.Second)
-
-		httpReq, err := http.NewRequestWithContext(attemptCtx, http.MethodPost, s.apiURL, bytes.NewReader(bodyBytes))
-		if err != nil {
-			cancel()
-			lastErr = err
-			s.fallbackDelay(ctx, i, len(models))
-			continue
-		}
-
-		httpReq.Header.Set("Content-Type", "application/json")
-		httpReq.Header.Set("Authorization", "Bearer "+s.apiKey)
-
-		resp, err := s.httpClient.Do(httpReq)
-		if err != nil {
-			cancel()
-			log.Printf("[ImageService] Model %s failed (or timed out after 200s): %v", model, err)
-			lastErr = err
-			s.fallbackDelay(ctx, i, len(models))
-			continue
-		}
-
-		respBytes, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
-
-		if resp.StatusCode >= 400 {
-			cancel()
-			errStr := string(respBytes)
-			log.Printf("[ImageService] Model %s HTTP %d: %s", model, resp.StatusCode, errStr)
-			lastErr = fmt.Errorf("HTTP %d: %s", resp.StatusCode, errStr)
-			s.fallbackDelay(ctx, i, len(models))
-			continue
-		}
-
-		var result struct {
-			Data []struct {
-				URL     string `json:"url"`
-				B64JSON string `json:"b64_json"`
-			} `json:"data"`
-		}
-
-		if err := json.Unmarshal(respBytes, &result); err == nil && len(result.Data) > 0 {
-			item := result.Data[0]
-			if item.B64JSON != "" {
-				decoded, err := base64.StdEncoding.DecodeString(item.B64JSON)
-				if err == nil && len(decoded) > 0 {
-					cancel()
-					log.Printf("[ImageService] Successfully generated b64 image via %s!", model)
-					return &GeneratedImage{
-						Data:        decoded,
-						ContentType: "image/jpeg",
-					}, nil
-				}
-			}
-			if item.URL != "" {
-				log.Printf("[ImageService] Successfully generated image URL via %s: %s", model, item.URL)
-				downloaded, err := s.downloadImage(attemptCtx, item.URL)
-				cancel()
-				if err == nil && len(downloaded) > 0 {
-					return &GeneratedImage{
-						Data:        downloaded,
-						ContentType: "image/jpeg",
-						URL:         item.URL,
-					}, nil
-				}
-				return &GeneratedImage{
-					URL: item.URL,
-				}, nil
-			}
-		}
-		cancel()
-
-		lastErr = fmt.Errorf("unexpected image response: %s", string(respBytes))
-		s.fallbackDelay(ctx, i, len(models))
-	}
-
-	if lastErr != nil {
-		return nil, lastErr
-	}
-	return nil, fmt.Errorf("all image models failed")
-}
-
-func (s *ImageService) fallbackDelay(ctx context.Context, currentIndex, totalModels int) {
-	if currentIndex < totalModels-1 {
-		delay := 6 * time.Second
-		log.Printf("⏳ [ImageService] Waiting %v before switching to next fallback image model...", delay)
-		select {
-		case <-ctx.Done():
-		case <-time.After(delay):
-		}
-	}
+	return nil, fmt.Errorf("all image engines failed")
 }
 
 func (s *ImageService) downloadImage(ctx context.Context, imgURL string) ([]byte, error) {

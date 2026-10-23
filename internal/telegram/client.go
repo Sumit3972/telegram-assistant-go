@@ -243,6 +243,38 @@ func (c *BotClient) SendVoice(ctx context.Context, chatID any, voiceData []byte,
 	return &apiResp.Result, nil
 }
 
+func (c *BotClient) SendPoll(ctx context.Context, chatID any, question string, options []string, isAnonymous, allowsMultiple bool, replyToID int) (*domain.TelegramMessage, error) {
+	if len(options) < 2 {
+		return nil, fmt.Errorf("polls must have at least 2 options")
+	}
+	if len(options) > 10 {
+		options = options[:10]
+	}
+
+	body := map[string]any{
+		"chat_id":  fmt.Sprintf("%v", chatID),
+		"question": question,
+		"options":  options,
+	}
+	if isAnonymous {
+		body["is_anonymous"] = true
+	} else {
+		body["is_anonymous"] = false
+	}
+	if allowsMultiple {
+		body["allows_multiple_answers"] = true
+	}
+	if replyToID > 0 {
+		body["reply_to_message_id"] = replyToID
+	}
+
+	var msg domain.TelegramMessage
+	if err := c.Request(ctx, "sendPoll", body, &msg); err != nil {
+		return nil, err
+	}
+	return &msg, nil
+}
+
 func (c *BotClient) SendSticker(ctx context.Context, chatID any, sticker string, replyToID int) (*domain.TelegramMessage, error) {
 	body := map[string]any{
 		"chat_id": fmt.Sprintf("%v", chatID),

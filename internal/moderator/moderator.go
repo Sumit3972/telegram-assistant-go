@@ -64,15 +64,11 @@ func NewModerator(
 	botClient *telegram.BotClient,
 	aiClient *ai.Client,
 ) *Moderator {
-	imageKey := cfg.ImageAPIKey
-	if imageKey == "" {
-		imageKey = cfg.AIAPIKey
-	}
-	imgService := media.NewImageService(cfg.GeminiImageAPIURL, imageKey, cfg.ImageModel)
+	imgService := media.NewImageService(cfg.ModelScopeAPIKey, cfg.ModelScopeAPIURL, cfg.ModelScopeModel)
 	if agy := aiClient.GetAntigravity(); agy != nil && agy.IsConfigured() {
 		imgService.SetAntigravityClient(agy)
 	}
-	voiceService := media.NewVoiceService(cfg.FishAudioAPIKey)
+	voiceService := media.NewVoiceService(cfg.FishAudioAPIKey, cfg.FishAudioRefID)
 	searchService := media.NewSearchService(cfg.TavilyAPIKey)
 	musicService := media.NewMusicService(cfg.MusicBotURL, cfg.MusicBotSecret)
 

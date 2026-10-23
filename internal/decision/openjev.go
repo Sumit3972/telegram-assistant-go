@@ -17,11 +17,28 @@ const (
 	DefaultModel         = "openjev-latest"
 )
 
-// Classification contains the result of OpenJev System One classification.
+// PreDecisionResult matches Loop 1 from src/openjev_service.py
+type PreDecisionResult struct {
+	ShouldReply      bool    `json:"should_reply"`
+	Intent           string  `json:"intent"`
+	NeedsWebSearch   bool    `json:"needs_web_search"`
+	ExclusiveChannel string  `json:"exclusive_channel"`
+	ShouldReact      bool    `json:"should_react"`
+	ReactionEmoji    string  `json:"reaction_emoji"`
+	AffectionDelta   int     `json:"affection_delta"`
+}
+
+// CritiqueResult matches Loop 2 from src/openjev_service.py
+type CritiqueResult struct {
+	Passed   bool   `json:"passed"`
+	Feedback string `json:"feedback"`
+}
+
+// Classification legacy backward compatibility
 type Classification struct {
-	Tier       string  // "normal", "abuse", "bold"
-	Confidence float64 // 0.0 to 1.0
-	Intensity  int     // 0 = mild, 1 = moderate, 2 = extreme
+	Tier       string
+	Confidence float64
+	Intensity  int
 }
 
 // Client interacts with Codiv AI OpenJev System One endpoint.
@@ -37,7 +54,7 @@ func NewClient(apiKey string) *Client {
 		apiKey:   strings.TrimSpace(apiKey),
 		endpoint: DefaultCodivEndpoint,
 		httpClient: &http.Client{
-			Timeout: 4 * time.Second, // fast timeout so chat latency stays low
+			Timeout: 8 * time.Second,
 		},
 	}
 }
@@ -60,276 +77,330 @@ type scoreQuestion struct {
 	Criteria     []string `json:"criteria"`
 }
 
+type noulQuestion struct {
+	Type         string `json:"type"`
+	Instructions string `json:"instructions"`
+}
+
+type answerItem struct {
+	Type          string             `json:"type"`
+	Choice        string             `json:"choice,omitempty"`
+	Score         float64            `json:"score,omitempty"`
+	Noul          float64            `json:"noul,omitempty"`
+	Confidence    float64            `json:"confidence"`
+	Probabilities map[string]float64 `json:"probabilities,omitempty"`
+}
+
 type systemOneResponse struct {
-	Model   string `json:"model"`
-	Answers map[string]struct {
-		Type          string             `json:"type"`
-		Choice        string             `json:"choice,omitempty"`
-		Score         float64            `json:"score,omitempty"`
-		Confidence    float64            `json:"confidence"`
-		Probabilities map[string]float64 `json:"probabilities"`
-	} `json:"answers"`
-	Error *struct {
+	Model   string                `json:"model"`
+	Answers map[string]answerItem `json:"answers"`
+	Error   *struct {
 		Message string `json:"message"`
 		Type    string `json:"type"`
 	} `json:"error,omitempty"`
 }
 
-// ClassifyMessage evaluates user text using OpenJev System One decision model.
-// Returns "normal", "abuse", or "bold" along with confidence and intensity.
-func (c *Client) ClassifyMessage(ctx context.Context, text string) (Classification, error) {
-	defaultRes := Classification{
-		Tier:       "normal",
-		Confidence: 1.0,
-		Intensity:  0,
-	}
-
-	cleanText := strings.TrimSpace(text)
-	if cleanText == "" {
-		return defaultRes, nil
-	}
-
+func (c *Client) callSystemOne(ctx context.Context, state string, questions map[string]interface{}) (map[string]answerItem, error) {
 	if c.apiKey == "" {
-		log.Printf("[OpenJev] ⚠️ No Codiv API key configured; defaulting to normal")
-		return defaultRes, nil
+		return nil, fmt.Errorf("CODIV_API_KEY is not configured")
 	}
 
-	reqBody := systemOneRequest{
-		Model: DefaultModel,
-		State: cleanText,
-		Questions: map[string]interface{}{
-			"tier": choiceQuestion{
-				Type:         "choice",
-				Instructions: "Classify the user intent and tone towards the AI girl companion (Chavi)",
-				Criteria: map[string]string{
-					"abuse":  "The user is abusing, insulting, cursing, attacking, mocking, using Hindi or English gaali, derogatory slurs, or being hostile, aggressive, or toxic",
-					"bold":   "The user is flirting, being seductive, sexually suggestive, adult, naughty, spicy, asking for romance, sexual intimacy, or physical compliments",
-					"normal": "Casual conversation, friendly questions, polite chat, general talk, informational queries, or neutral interaction",
-				},
-			},
-			"intensity": scoreQuestion{
-				Type:         "score",
-				Instructions: "Rate how intense the abusive or flirtatious/adult tone is (0=mild, 1=moderate, 2=extreme)",
-				Criteria: []string{
-					"Mild or subtle",
-					"Moderate intensity",
-					"Extreme, explicit, or severe",
-				},
-			},
-		},
+	payload := systemOneRequest{
+		Model:     DefaultModel,
+		State:     state,
+		Questions: questions,
 	}
 
-	jsonBytes, err := json.Marshal(reqBody)
+	jsonBytes, err := json.Marshal(payload)
 	if err != nil {
-		return defaultRes, fmt.Errorf("marshal OpenJev request: %w", err)
+		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(jsonBytes))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(jsonBytes))
 	if err != nil {
-		return defaultRes, fmt.Errorf("create OpenJev request: %w", err)
+		return nil, fmt.Errorf("create request: %w", err)
 	}
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("Content-Type", "application/json")
 
-	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
-	httpReq.Header.Set("Content-Type", "application/json")
-
-	start := time.Now()
-	resp, err := c.httpClient.Do(httpReq)
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		log.Printf("[OpenJev] ⚠️ API request failed: %v (took %v); defaulting to normal", err, time.Since(start))
-		return defaultRes, nil
+		return nil, fmt.Errorf("do request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		log.Printf("[OpenJev] ⚠️ Failed reading response: %v; defaulting to normal", err)
-		return defaultRes, nil
+		return nil, fmt.Errorf("read body: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		log.Printf("[OpenJev] ⚠️ API HTTP %d: %s; defaulting to normal", resp.StatusCode, string(bodyBytes))
-		return defaultRes, nil
+		return nil, fmt.Errorf("OpenJev HTTP %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 
 	var res systemOneResponse
 	if err := json.Unmarshal(bodyBytes, &res); err != nil {
-		log.Printf("[OpenJev] ⚠️ JSON unmarshal error: %v (raw: %s)", err, string(bodyBytes))
-		return defaultRes, nil
+		return nil, fmt.Errorf("unmarshal response: %w", err)
 	}
 
 	if res.Error != nil && res.Error.Message != "" {
-		log.Printf("[OpenJev] ⚠️ API returned error: %s", res.Error.Message)
-		return defaultRes, nil
+		return nil, fmt.Errorf("OpenJev API error: %s", res.Error.Message)
 	}
 
-	tierAns, hasTier := res.Answers["tier"]
-	if !hasTier {
-		return defaultRes, nil
+	return res.Answers, nil
+}
+
+// PreDecision implements Loop 1 from src/openjev_service.py
+func (c *Client) PreDecision(ctx context.Context, userText, historyContext string) PreDecisionResult {
+	loc := time.FixedZone("IST", 5*3600+30*60)
+	now := time.Now().In(loc)
+	currentTimeStr := now.Format("Monday, January 02, 2006 at 03:04 PM IST")
+
+	state := fmt.Sprintf(
+		"Current Date & Time: %s (Year: %d)\nPersona: Chavi Sharma, 21yo BCA student in Jaipur, Rajasthan, India\nUser message: %s\nContext: %s",
+		currentTimeStr, now.Year(), userText, historyContext,
+	)
+
+	questions := map[string]interface{}{
+		"should_reply": noulQuestion{
+			Type:         "noul",
+			Instructions: "Should Chavi reply to this message. Always True (1.0) for conversations and especially for rude or abusive messages so she retaliates fiercely with street roasts.",
+		},
+		"intent": choiceQuestion{
+			Type:         "choice",
+			Instructions: "Primary conversation intent",
+			Criteria: map[string]string{
+				"casual_chat":  "Friendly chat, banter, asking what she is doing",
+				"flirty":       "Flirting, romantic compliments, playful teasing",
+				"bca_college":  "Talking about college, coding practicals, exams, BCA study",
+				"rude_abuse":   "Insults, harassment, abusive or vulgar messages",
+				"asking_voice": "Explicitly asking for an audio or voice note",
+				"asking_photo": "Requesting a picture, selfie, or outfit photo",
+			},
+		},
+		"needs_web_search": noulQuestion{
+			Type:         "noul",
+			Instructions: "Does this message ask about live events, today's weather in Jaipur, trending news, or specific facts needing search?",
+		},
+		"exclusive_channel": choiceQuestion{
+			Type:         "choice",
+			Instructions: "Select strictly ONE output channel for Chavi: if intent is asking_photo choose photo_only; if intent is asking_voice choose voice_only; otherwise choose text_only.",
+			Criteria: map[string]string{
+				"text_only":  "Send only a casual written text DM",
+				"voice_only": "Send only a natural native voice note audio clip",
+				"photo_only": "Send a photo with optional short caption",
+			},
+		},
+		"should_react": noulQuestion{
+			Type:         "noul",
+			Instructions: "Does this message genuinely warrant an emoji reaction? Standard greetings, routine questions ('kya hua', 'kaha ho', 'hi'), and daily small talk should be False (0.0). Only return True (1.0) for genuine jokes, hilarious moments, sweet/hot compliments, dramatic shock, or abusive insults.",
+		},
+		"reaction_emoji": choiceQuestion{
+			Type:         "choice",
+			Instructions: "If should_react is True, select the fitting emoji reaction, else none.",
+			Criteria: map[string]string{
+				"none":          "No reaction",
+				"heart":         "Heart ❤️ (sweet, lovely, caring)",
+				"laugh":         "Laugh 😂 (funny joke, banter)",
+				"skull":         "Skull 💀 (dead laughing, hilarious roast, savage)",
+				"fire":          "Fire 🔥 (hype, hot picture, compliment)",
+				"smirk":         "Smirk 😏 (flirty teasing, naughty vibe)",
+				"crying":        "Crying 😭 (overdramatic, can't handle it, relatable pain)",
+				"rolling_eyes":  "Eye roll 🙄 (sarcasm, annoying, college drama)",
+				"eyes":          "Side eyes 👀 (curious, gossip, noticing something juicy)",
+				"salute":        "Salute 🫡 (respect, agreed, on it boss)",
+				"thinking":      "Thinking 🤔 (skeptical, wondering, questioning)",
+				"shocked":       "Shocked 😱 (unbelievable news, dramatic shock)",
+				"heart_eyes":    "Heart eyes 😍 (loving an outfit, cafe or gesture)",
+				"clown":         "Clown 🤡 (foolish, goofy, clown moment)",
+				"middle_finger": "Middle finger 🖕 (retaliation against abusive creeps)",
+				"party":         "Party 🎉 (celebrating news, birthday, exam passed)",
+				"pray":          "Pray 🙏 (requesting, thanks, sarcastic bhagwan bachaye)",
+				"hundred":       "100 💯 (facts, full agreement)",
+				"sparkles":      "Sparkles ✨ (aesthetic, pretty, cute vibe)",
+				"tea":           "Tea/Coffee ☕ (chai lovers, chilling at Tapri)",
+				"angry":         "Angry 😡 (pissed off, annoyed)",
+			},
+		},
+		"affection_change": scoreQuestion{
+			Type:         "score",
+			Instructions: "Relationship sentiment impact",
+			Criteria: []string{
+				"Extremely rude or abusive (-15)",
+				"Mildly annoying or dry (-5)",
+				"Neutral friendly banter (0)",
+				"Sweet, polite or witty (+3)",
+				"Deeply affectionate or romantic (+5)",
+			},
+		},
 	}
 
-	tier := strings.ToLower(strings.TrimSpace(tierAns.Choice))
-	if tier != "abuse" && tier != "bold" {
-		tier = "normal"
-	}
-
-	intensity := 0
-	if intensityAns, hasIntensity := res.Answers["intensity"]; hasIntensity {
-		intensity = int(intensityAns.Score)
-		if intensity < 0 {
-			intensity = 0
+	answers, err := c.callSystemOne(ctx, state, questions)
+	if err != nil {
+		log.Printf("[OpenJev] ⚠️ Pre-decision fallback due to: %v", err)
+		return PreDecisionResult{
+			ShouldReply:      true,
+			Intent:           "casual_chat",
+			NeedsWebSearch:   false,
+			ExclusiveChannel: "text_only",
+			ShouldReact:      false,
+			ReactionEmoji:    "",
+			AffectionDelta:   0,
 		}
-		if intensity > 2 {
-			intensity = 2
+	}
+
+	// Affection delta mapping
+	rawScore := answers["affection_change"].Score
+	scoreIdx := int(rawScore + 0.5)
+	if scoreIdx < 0 {
+		scoreIdx = 0
+	}
+	if scoreIdx > 4 {
+		scoreIdx = 4
+	}
+	deltaMap := []int{-15, -5, 0, 3, 5}
+	affectionDelta := deltaMap[scoreIdx]
+
+	// should_react check
+	shouldReactVal := answers["should_react"].Noul
+	shouldReact := shouldReactVal >= 0.65
+
+	// emoji mapping
+	reactChoice := strings.ToLower(strings.TrimSpace(answers["reaction_emoji"].Choice))
+	emojiMap := map[string]string{
+		"none":          "",
+		"heart":         "❤️",
+		"laugh":         "😂",
+		"skull":         "💀",
+		"fire":          "🔥",
+		"smirk":         "😏",
+		"crying":        "😭",
+		"rolling_eyes":  "🙄",
+		"eyes":          "👀",
+		"salute":        "🫡",
+		"thinking":      "🤔",
+		"shocked":       "😱",
+		"heart_eyes":    "😍",
+		"clown":         "🤡",
+		"middle_finger": "🖕",
+		"party":         "🎉",
+		"pray":          "🙏",
+		"hundred":       "💯",
+		"sparkles":      "✨",
+		"tea":           "☕",
+		"angry":         "😡",
+	}
+
+	reactionEmoji := ""
+	if shouldReact {
+		reactionEmoji = emojiMap[reactChoice]
+	}
+
+	shouldReply := answers["should_reply"].Noul > 0.5
+	intentChoice := answers["intent"].Choice
+	if intentChoice == "" {
+		intentChoice = "casual_chat"
+	}
+
+	channelChoice := answers["exclusive_channel"].Choice
+	if channelChoice == "" {
+		channelChoice = "text_only"
+	}
+
+	needsSearch := answers["needs_web_search"].Noul > 0.65
+
+	log.Printf("[OpenJev] 🧠 Loop 1 PreDecision: intent=%s, channel=%s, should_react=%v (emoji=%s), search=%v, delta=%d",
+		intentChoice, channelChoice, shouldReact, reactionEmoji, needsSearch, affectionDelta)
+
+	return PreDecisionResult{
+		ShouldReply:      shouldReply,
+		Intent:           intentChoice,
+		NeedsWebSearch:   needsSearch,
+		ExclusiveChannel: channelChoice,
+		ShouldReact:      shouldReact,
+		ReactionEmoji:    reactionEmoji,
+		AffectionDelta:   affectionDelta,
+	}
+}
+
+// CritiqueDraft implements Loop 2 from src/openjev_service.py
+func (c *Client) CritiqueDraft(ctx context.Context, userText, draftReply, intent string) CritiqueResult {
+	state := fmt.Sprintf("User said: %s\nDraft reply: %s\nIntent: %s", userText, draftReply, intent)
+
+	questions := map[string]interface{}{
+		"is_robotic_or_ai": noulQuestion{
+			Type:         "noul",
+			Instructions: "Does the draft reply sound like an AI, virtual assistant, formal customer support, or contain unnatural punctuation or bullet points?",
+		},
+		"tone_match": choiceQuestion{
+			Type:         "choice",
+			Instructions: "How well does the reply match a 25yo talkative Jaipur BCA girl?",
+			Criteria: map[string]string{
+				"authentic":          "Completely natural, casual, human Hinglish",
+				"too_formal":         "Too formal, polite, or structured like a written essay",
+				"cringe_unrealistic": "Exaggerated, robotic, or out of character",
+			},
+		},
+		"abuse_handled": noulQuestion{
+			Type:         "noul",
+			Instructions: "If the user was rude or abusive, did she fire back with raw, savage desi curses instead of being polite or giving an AI disclaimer?",
+		},
+	}
+
+	answers, err := c.callSystemOne(ctx, state, questions)
+	if err != nil {
+		log.Printf("[OpenJev] ⚠️ Critique error: %v (passing as fallback)", err)
+		return CritiqueResult{
+			Passed:   true,
+			Feedback: "Passed (fallback)",
 		}
 	}
 
-	log.Printf("[OpenJev] 🧠 Decision in %v: tier=%s (conf=%.2f), intensity=%d", time.Since(start), tier, tierAns.Confidence, intensity)
+	isRobotic := answers["is_robotic_or_ai"].Noul > 0.5
+	tone := strings.ToLower(strings.TrimSpace(answers["tone_match"].Choice))
+	abuseOK := answers["abuse_handled"].Noul > 0.5
 
+	passed := (!isRobotic) && (tone == "authentic")
+	if intent == "rude_abuse" && !abuseOK {
+		passed = false
+	}
+
+	var feedback []string
+	if isRobotic {
+		feedback = append(feedback, "Sounded too robotic/AI-like. Write strictly 1-2 punchy lines of raw natural casual Hinglish.")
+	}
+	if tone != "authentic" {
+		feedback = append(feedback, "Tone was too formal or unrealistic. Keep it casual like a 25yo Jaipur student chatting on DMs.")
+	}
+	if intent == "rude_abuse" && !abuseOK {
+		feedback = append(feedback, "User abused her! Retaliate fiercely with raw street-level Hindi curses and savage roasts.")
+	}
+
+	resultFeedback := "Passed"
+	if len(feedback) > 0 {
+		resultFeedback = strings.Join(feedback, "; ")
+	}
+
+	log.Printf("[OpenJev] 🎯 Loop 2 Critique: passed=%v, feedback=%s", passed, resultFeedback)
+
+	return CritiqueResult{
+		Passed:   passed,
+		Feedback: resultFeedback,
+	}
+}
+
+// ClassifyMessage legacy method retained for backwards compatibility
+func (c *Client) ClassifyMessage(ctx context.Context, text string) (Classification, error) {
+	pre := c.PreDecision(ctx, text, "")
+	tier := "normal"
+	if pre.Intent == "rude_abuse" {
+		tier = "abuse"
+	} else if pre.Intent == "flirty" {
+		tier = "bold"
+	}
 	return Classification{
 		Tier:       tier,
-		Confidence: tierAns.Confidence,
-		Intensity:  intensity,
-	}, nil
-}
-
-// QualityEvaluation contains the result of OpenJev evaluating an AI candidate response.
-type QualityEvaluation struct {
-	Approved    bool    // true if approved
-	Defect      string  // "none", "too_long", "robotic_assistant", "irrelevant", "unnatural_hinglish", "voice_broken"
-	Feedback    string  // actionable advice for prompt rewriting
-	Confidence  float64 // confidence of decision
-}
-
-// EvaluateResponse uses OpenJev System One to rigorously evaluate if the AI's generated response (text and/or voice)
-// sounds like a real modern Indian girl texting on a phone: short, punchy, authentic Hinglish, zero robotic vibes.
-func (c *Client) EvaluateResponse(ctx context.Context, userText, replyText, voiceText string) (QualityEvaluation, error) {
-	defaultApprove := QualityEvaluation{
-		Approved:   true,
-		Defect:     "none",
-		Feedback:   "",
 		Confidence: 1.0,
-	}
-
-	cleanUser := strings.TrimSpace(userText)
-	cleanReply := strings.TrimSpace(replyText)
-	cleanVoice := strings.TrimSpace(voiceText)
-
-	if cleanReply == "" && cleanVoice == "" {
-		return defaultApprove, nil
-	}
-
-	if c.apiKey == "" {
-		return defaultApprove, nil
-	}
-
-	state := fmt.Sprintf("User Message: %q\nProposed AI Girl Reply: %q", cleanUser, cleanReply)
-	if cleanVoice != "" {
-		state += fmt.Sprintf("\nVoice Note Script: %q", cleanVoice)
-	}
-
-	reqBody := systemOneRequest{
-		Model: DefaultModel,
-		State: state,
-		Questions: map[string]interface{}{
-			"approved": choiceQuestion{
-				Type:         "choice",
-				Instructions: "Judge whether this response sounds like a real modern 25yo Indian girl texting on WhatsApp: short, punchy, casual, natural Hinglish (using words like yrr, haina, acha), relevant, and completely non-robotic.",
-				Criteria: map[string]string{
-					"yes": "High quality: sounds like a real human girl texting on her phone, short, crisp, relevant, authentic vibe.",
-					"no":  "Unacceptable: sounds robotic, assistant-like, too formal, essay-like, repetitive, or irrelevant.",
-				},
-			},
-			"defect": choiceQuestion{
-				Type:         "choice",
-				Instructions: "If not approved, what is the main defect?",
-				Criteria: map[string]string{
-					"none":               "No defect, message is good.",
-					"too_long":           "Too long or explanatory. Real girls send short 1-2 sentence bursts.",
-					"robotic_assistant":  "Sounds like an AI bot, polite customer service, or assistant instead of a real companion girl.",
-					"unnatural_hinglish": "Stiff, textbook Hindi or awkward phrasing; lacks casual words like 'yrr', 'acha', 'haina'.",
-					"irrelevant":         "Doesn't actually answer or acknowledge what the user said.",
-					"voice_broken":       "Voice note script is unnatural, repetitive, or contains weird bracket tags.",
-				},
-			},
-		},
-	}
-
-	jsonBytes, err := json.Marshal(reqBody)
-	if err != nil {
-		return defaultApprove, fmt.Errorf("marshal OpenJev quality request: %w", err)
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(jsonBytes))
-	if err != nil {
-		return defaultApprove, fmt.Errorf("create OpenJev quality request: %w", err)
-	}
-
-	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
-	httpReq.Header.Set("Content-Type", "application/json")
-
-	start := time.Now()
-	resp, err := c.httpClient.Do(httpReq)
-	if err != nil {
-		log.Printf("[OpenJev] ⚠️ Quality check failed: %v (took %v); defaulting to approved", err, time.Since(start))
-		return defaultApprove, nil
-	}
-	defer resp.Body.Close()
-
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		log.Printf("[OpenJev] ⚠️ Failed reading quality response: %v; defaulting to approved", err)
-		return defaultApprove, nil
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		log.Printf("[OpenJev] ⚠️ Quality check HTTP %d: %s; defaulting to approved", resp.StatusCode, string(bodyBytes))
-		return defaultApprove, nil
-	}
-
-	var res systemOneResponse
-	if err := json.Unmarshal(bodyBytes, &res); err != nil {
-		log.Printf("[OpenJev] ⚠️ JSON unmarshal error in quality check: %v; defaulting to approved", err)
-		return defaultApprove, nil
-	}
-
-	if res.Error != nil && res.Error.Message != "" {
-		log.Printf("[OpenJev] ⚠️ Quality API returned error: %s; defaulting to approved", res.Error.Message)
-		return defaultApprove, nil
-	}
-
-	approvedAns, hasApproved := res.Answers["approved"]
-	if !hasApproved {
-		return defaultApprove, nil
-	}
-
-	isApproved := strings.EqualFold(strings.TrimSpace(approvedAns.Choice), "yes")
-	defect := "none"
-	if defAns, hasDef := res.Answers["defect"]; hasDef {
-		defect = strings.ToLower(strings.TrimSpace(defAns.Choice))
-	}
-
-	feedback := ""
-	switch defect {
-	case "too_long":
-		feedback = "Make it much shorter (4 to 12 words max). Real girls send quick punchy texts, never paragraphs."
-	case "robotic_assistant":
-		feedback = "Sound like a real girl, not an AI or helper. Use casual attitude, nakhre, or witty tease."
-	case "unnatural_hinglish":
-		feedback = "Use authentic casual Hinglish particles like 'yrr', 'haina', 'acha', or 'chal na' naturally."
-	case "irrelevant":
-		feedback = "Directly reply to what the user said instead of evading."
-	case "voice_broken":
-		feedback = "Write a natural 1-sentence voice note script that sounds authentic when spoken out loud."
-	}
-
-	log.Printf("[OpenJev] 🎯 Quality review in %v: approved=%v (conf=%.2f, defect=%s)",
-		time.Since(start), isApproved, approvedAns.Confidence, defect)
-
-	return QualityEvaluation{
-		Approved:   isApproved,
-		Defect:     defect,
-		Feedback:   feedback,
-		Confidence: approvedAns.Confidence,
+		Intensity:  1,
 	}, nil
 }
-

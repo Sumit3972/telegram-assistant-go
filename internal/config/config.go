@@ -26,7 +26,11 @@ type Config struct {
 	ImageAPIKey           string
 	GeminiImageAPIURL     string
 	ImageModel            string
+	ModelScopeAPIKey      string
+	ModelScopeAPIURL      string
+	ModelScopeModel       string
 	FishAudioAPIKey       string
+	FishAudioRefID        string
 	MusicBotURL           string
 	MusicBotSecret        string
 	AnyAPICookie          string
@@ -39,6 +43,7 @@ type Config struct {
 	CodivAPIKey           string
 
 	WorkerPoolSize        int
+	DebounceDurationMs    int
 }
 
 // Load reads the .env file (if present) and environment variables into Config.
@@ -61,6 +66,12 @@ func Load() (*Config, error) {
 		workerPoolSize = 16
 	}
 
+	debounceMsStr := getEnv("DEBOUNCE_DURATION_MS", "3500")
+	debounceMs, _ := strconv.Atoi(debounceMsStr)
+	if debounceMs <= 0 {
+		debounceMs = 3500
+	}
+
 	cfg := &Config{
 		Port:                  port,
 		DatabaseURL:           getEnv("DATABASE_URL", ""),
@@ -77,19 +88,24 @@ func Load() (*Config, error) {
 		ImageAPIKey:           getEnv("IMAGE_API_KEY", getEnv("AI_API_KEY", "sk-ukfBCvlCRKRyS1xr5nRv3bqSuDudVy5mQf3OuW13QVF6q2V8")),
 		GeminiImageAPIURL:     getEnv("GEMINI_IMAGE_API_URL", "https://api.futureppo.top/v1/images/generations"),
 		ImageModel:            getEnv("IMAGE_MODEL", "agnes-image-2.5-flash"),
-		FishAudioAPIKey:       getEnv("FISH_AUDIO_API_KEY", ""),
+		ModelScopeAPIKey:      getEnv("MODELSCOPE_API_KEY", "ms-b651c584-6b06-482f-90c7-b8fe50fd516c"),
+		ModelScopeAPIURL:      getEnv("MODELSCOPE_API_BASE", "https://api-inference.modelscope.ai/v1"),
+		ModelScopeModel:       getEnv("MODELSCOPE_IMAGE_MODEL", "Qwen/Qwen-Image-2.1"),
+		FishAudioAPIKey:       getEnv("FISH_AUDIO_API_KEY", "sk-fish-DpjR6d_vg1G18CpBL13vXa_FXHL5qhOfgq_xcSzcgRM"),
+		FishAudioRefID:        getEnv("FISH_AUDIO_REFERENCE_ID", "ac315c50a9734bb7a608102fce24e601"),
 		MusicBotURL:           getEnv("MUSIC_BOT_URL", "https://sumitmehta396-hinata-music-bot.hf.space"),
 		MusicBotSecret:        getEnv("MUSIC_BOT_SECRET", "HinataSecretMusicKey2026"),
 		AnyAPICookie:          getEnv("ANYAPI_COOKIE", ""),
 		AnyAPIEmail:           getEnv("ANYAPI_EMAIL", "sumitmehta396@gmail.com"),
 		AnyAPIPassword:        getEnv("ANYAPI_PASSWORD", "Sumit3972@gmail"),
-		TavilyAPIKey:          getEnv("TAVILY_API_KEY", "tvly-dev-dummy"),
+		TavilyAPIKey:          getEnv("TAVILY_API_KEY", "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"),
 		AntigravityRefreshToken: getEnv("ANTIGRAVITY_REFRESH_TOKEN", ""),
 		AntigravityEmail:        getEnv("ANTIGRAVITY_EMAIL", ""),
 		AntigravityAccounts:     getEnv("ANTIGRAVITY_ACCOUNTS", ""),
-		CodivAPIKey:           getEnv("CODIV_API_KEY", "sk-codiv-0iWnWzTxS4ayN9N0w4ykZu62GlQjuXjrO0lQOZBI"),
+		CodivAPIKey:           getEnv("CODIV_API_KEY", "sk-codiv-wXAmZjRSnKWYunGwYlTkZxhnxDSLyiPfVAzHnpeh"),
 
 		WorkerPoolSize:        workerPoolSize,
+		DebounceDurationMs:    debounceMs,
 	}
 
 	if cfg.DatabaseURL == "" {

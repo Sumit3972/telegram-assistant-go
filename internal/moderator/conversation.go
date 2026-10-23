@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/rand"
 	"regexp"
 	"strconv"
 	"strings"
@@ -28,8 +29,8 @@ type messageBatch struct {
 }
 
 const (
-	debounceDuration = 2500 * time.Millisecond // wait 2.5s for user to finish rapid multi-message typing
-	maxBatchWait     = 6000 * time.Millisecond // maximum ceiling delay before flushing
+	debounceDuration = 3500 * time.Millisecond // wait 3.5s for user to finish typing multiple rapid messages
+	maxBatchWait     = 7000 * time.Millisecond // maximum ceiling delay before flushing
 )
 
 type ConversationHandler struct {
@@ -51,8 +52,8 @@ type ConversationHandler struct {
 	botUsername    string
 	fallbackKey    string
 
-	batchMu        sync.Mutex
-	batches        map[string]*messageBatch
+	batchMu sync.Mutex
+	batches map[string]*messageBatch
 }
 
 func (h *ConversationHandler) SetUserbotSender(s domain.UserbotSender) {
@@ -102,7 +103,7 @@ func (h *ConversationHandler) EnqueueConversation(ctx context.Context, msg *doma
 		return
 	}
 
-	// Trigger typing indicator immediately so the user sees "Chavi is typing..." right away
+	// Trigger typing indicator immediately so user sees "Chavi is typing..."
 	h.sendChatAction(ctx, msg.Chat.ID, msg.IsUserbot, "typing")
 
 	key := fmt.Sprintf("%d:%d", msg.Chat.ID, msg.From.ID)
@@ -136,7 +137,7 @@ func (h *ConversationHandler) EnqueueConversation(ctx context.Context, msg *doma
 			return
 		}
 
-		// Reset debounce timer
+		// Reset debounce timer to 3.5 seconds
 		batch.timer = time.AfterFunc(debounceDuration, func() {
 			h.flushBatch(key)
 		})
@@ -165,7 +166,6 @@ func (h *ConversationHandler) EnqueueConversation(ctx context.Context, msg *doma
 	h.batches[key] = newBatch
 }
 
-// HasActiveBatch returns true if there is an active debouncing batch for this chat and user.
 func (h *ConversationHandler) HasActiveBatch(chatID, userID int64) bool {
 	h.batchMu.Lock()
 	defer h.batchMu.Unlock()
@@ -211,7 +211,6 @@ func (h *ConversationHandler) processBatch(batch *messageBatch) {
 		mergedMsg.Text = strings.Join(cleanTexts, "\n")
 	}
 
-	// Preserve image if any message in the batch contained an image
 	for _, m := range batch.messages {
 		if mergedMsg.ImageBase64 == "" && m.ImageBase64 != "" {
 			mergedMsg.ImageBase64 = m.ImageBase64
@@ -254,7 +253,6 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 		username = msg.From.FirstName
 	}
 
-	// Trigger typing indicator immediately
 	h.sendChatAction(ctx, msg.Chat.ID, msg.IsUserbot, "typing")
 
 	// 1. Get affection score
@@ -263,87 +261,78 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 		affectionScore = rel.AffectionScore
 	}
 
-	// 2. Get group rules
-	rules := ""
-	if g, err := h.groupRepo.GetGroup(ctx, chatIDStr); err == nil && g != nil {
-		rules = g.Rules
+	// 2. Get recent history
+	recent, _ := h.historyRepo.GetRecentMessages(ctx, chatIDStr, 20)
+	var historySnippets []string
+	for _, m := range recent {
+		if len(historySnippets) >= 4 {
+			break
+		}
+		historySnippets = append(historySnippets, fmt.Sprintf("%s: %s", m.Username, m.MessageText))
+	}
+	historyContext := strings.Join(historySnippets, "\n")
+
+	// 3. OpenJev Loop 1: Fast System One Pre-Decision (~200ms)
+	log.Printf("[Conversation] Running OpenJev Loop 1 (System One pre-decision)...")
+	pre := h.decisionClient.PreDecision(ctx, text, historyContext)
+
+	intent := pre.Intent
+	// Chavi always retaliates against abusers with raw street curses; never stays silent!
+	shouldReply := pre.ShouldReply
+	if intent == "rude_abuse" {
+		shouldReply = true
+	}
+	if !shouldReply {
+		log.Printf("[Conversation] OpenJev determined Chavi should not reply to this message.")
+		return
 	}
 
-	// 3. Get recent history (used directly for multi-turn ChatMessage array)
-	recent, _ := h.historyRepo.GetRecentMessages(ctx, chatIDStr, 20)
+	// Update affection
+	if pre.AffectionDelta != 0 {
+		_, _ = h.relRepo.UpdateAffection(ctx, chatIDStr, userIDStr, username, pre.AffectionDelta)
+	}
 
-	// 4. Evaluate Content Tier using OpenJev Decision Engine
-	tier := "normal"
-	intensity := 0
-	if h.decisionClient != nil && text != "" {
-		if cls, err := h.decisionClient.ClassifyMessage(ctx, text); err == nil {
-			tier = cls.Tier
-			intensity = cls.Intensity
-			if tier != "normal" {
-				log.Printf("[Conversation] 🔥 OpenJev classified message: user=@%s tier=%s (intensity=%d, conf=%.2f)", username, tier, intensity, cls.Confidence)
-			}
+	// Auto-align exclusive channel if user asks for photo or voice
+	exclusiveChannel := pre.ExclusiveChannel
+	userLower := strings.ToLower(text)
+	isPhotoReq := intent == "asking_photo" || (
+		(strings.Contains(userLower, "photo") || strings.Contains(userLower, "pic") || strings.Contains(userLower, "selfie") || strings.Contains(userLower, "picture")) &&
+			(strings.Contains(userLower, "bhej") || strings.Contains(userLower, "send") || strings.Contains(userLower, "dikha") || strings.Contains(userLower, "share") || strings.Contains(userLower, "click") || strings.Contains(userLower, "de")))
+	isVoiceReq := intent == "asking_voice" || (
+		(strings.Contains(userLower, "voice") || strings.Contains(userLower, "audio") || strings.Contains(userLower, "awaaz") || strings.Contains(userLower, "bol ke") || strings.Contains(userLower, "speak")) &&
+			(strings.Contains(userLower, "bhej") || strings.Contains(userLower, "send") || strings.Contains(userLower, "sunao") || strings.Contains(userLower, "karo") || strings.Contains(userLower, "note")))
+
+	if isPhotoReq {
+		exclusiveChannel = "photo_only"
+		log.Printf("[Conversation] 📸 Detected photo request -> Setting exclusive channel to PHOTO_ONLY.")
+	} else if isVoiceReq {
+		exclusiveChannel = "voice_only"
+		log.Printf("[Conversation] 🎙️ Detected voice request -> Setting exclusive channel to VOICE_ONLY.")
+	}
+
+	// 4. Real-Time Web Search via Tavily (if needed)
+	var searchContext string
+	if pre.NeedsWebSearch && h.searchService != nil {
+		log.Printf("[Conversation] Real-time search requested for: %s", text)
+		searchRes, err := h.searchService.Search(ctx, text)
+		if err == nil && searchRes != "" {
+			searchContext = searchRes
+			log.Printf("[Conversation] Tavily search result preview: %s", searchContext[:min(len(searchContext), 100)])
 		}
 	}
 
-	// 5. Build System Prompt with Tier and Intensity
-	sysPrompt := prompt.BuildDynamicSystemPrompt(prompt.SystemPromptParams{
-		Identity: prompt.IdentityParams{
-			Name:     h.botName,
-			Username: h.botUsername,
-			Gender:   "female",
-		},
-		IsAdmin:        isAdmin,
-		Username:       username,
-		FirstName:      msg.From.FirstName,
-		AffectionScore: affectionScore,
-		Rules:          rules,
-		UserText:       text,
-		WithHistory:    false,
-		HistoryContext: "",
-		ContentTier:    tier,
-		Intensity:      intensity,
-	})
-
-	// 5. Extract image/photo if present in current message or replied message for Vision AI
+	// 5. Extract image for Vision AI
 	var imageBase64 string
 	if msg.ImageBase64 != "" {
 		imageBase64 = msg.ImageBase64
 	} else if len(msg.Photo) > 0 && h.botClient != nil {
 		largest := msg.Photo[len(msg.Photo)-1]
-		if imgURI, err := h.botClient.DownloadFileBase64(ctx, largest.FileID); err == nil && imgURI != "" {
-			imageBase64 = imgURI
-		}
-	} else if msg.Animation != nil && msg.Animation.Thumb != nil && h.botClient != nil {
-		if imgURI, err := h.botClient.DownloadFileBase64(ctx, msg.Animation.Thumb.FileID); err == nil && imgURI != "" {
-			imageBase64 = imgURI
-		}
-	} else if msg.Sticker != nil && msg.Sticker.Thumb != nil && h.botClient != nil {
-		if imgURI, err := h.botClient.DownloadFileBase64(ctx, msg.Sticker.Thumb.FileID); err == nil && imgURI != "" {
+		if imgURI, err := h.botClient.DownloadFileBase64(ctx, largest.FileID); err == nil {
 			imageBase64 = imgURI
 		}
 	}
 
-	// Check replied message for image / GIF / sticker if not in current message
-	if imageBase64 == "" && msg.ReplyToMessage != nil {
-		if msg.ReplyToMessage.ImageBase64 != "" {
-			imageBase64 = msg.ReplyToMessage.ImageBase64
-		} else if len(msg.ReplyToMessage.Photo) > 0 && h.botClient != nil {
-			largest := msg.ReplyToMessage.Photo[len(msg.ReplyToMessage.Photo)-1]
-			if imgURI, err := h.botClient.DownloadFileBase64(ctx, largest.FileID); err == nil && imgURI != "" {
-				imageBase64 = imgURI
-			}
-		} else if msg.ReplyToMessage.Animation != nil && msg.ReplyToMessage.Animation.Thumb != nil && h.botClient != nil {
-			if imgURI, err := h.botClient.DownloadFileBase64(ctx, msg.ReplyToMessage.Animation.Thumb.FileID); err == nil && imgURI != "" {
-				imageBase64 = imgURI
-			}
-		} else if msg.ReplyToMessage.Sticker != nil && msg.ReplyToMessage.Sticker.Thumb != nil && h.botClient != nil {
-			if imgURI, err := h.botClient.DownloadFileBase64(ctx, msg.ReplyToMessage.Sticker.Thumb.FileID); err == nil && imgURI != "" {
-				imageBase64 = imgURI
-			}
-		}
-	}
-
-	// 6. Assemble Tools
+	// 6. Tools
 	var tools []domain.ToolDefinition
 	tools = append(tools, ai.GetConversationTools()...)
 	tools = append(tools, ai.GetContactAdminTools()...)
@@ -351,117 +340,111 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 		tools = append(tools, ai.GetAdminTools()...)
 	}
 
-	messages := []domain.ChatMessage{
-		{
-			Role:    "system",
-			Content: sysPrompt,
-		},
-	}
-
-	// Add multi-turn message history for rich conversational context
-	isPrivateChat := msg.Chat.Type == "private"
-	currentMsgIDStr := strconv.Itoa(msg.MessageID)
-	hasCurrentInHistory := false
-
-	for _, m := range recent {
-		if m.MessageID != "" && m.MessageID == currentMsgIDStr {
-			hasCurrentInHistory = true
-		}
-		isAssistant := m.UserID == "assistant" ||
-			strings.EqualFold(m.Username, h.botUsername) ||
-			strings.EqualFold(m.Username, h.botName)
-
-		if isAssistant {
-			messages = append(messages, domain.ChatMessage{
-				Role:    "assistant",
-				Content: m.MessageText,
-			})
-		} else {
-			content := m.MessageText
-			if !isPrivateChat && m.Username != "" {
-				content = fmt.Sprintf("%s: %s", m.Username, m.MessageText)
-			}
-			messages = append(messages, domain.ChatMessage{
-				Role:    "user",
-				Content: content,
-			})
-		}
-	}
-
-	// If current message was not in recent history, append it as the latest user turn
-	if !hasCurrentInHistory {
-		content := text
-		if content == "" && imageBase64 != "" {
-			content = "Look at this image / GIF"
-		}
-		if !isPrivateChat && username != "" {
-			content = fmt.Sprintf("%s: %s", username, content)
-		}
-		if imageBase64 != "" {
-			log.Printf("[Conversation] Attaching multimodal image to AI request (base64 length=%d)", len(imageBase64))
-			messages = append(messages, domain.ChatMessage{
-				Role: "user",
-				Content: []domain.ChatMessageContentPart{
-					{
-						Type: "text",
-						Text: content,
-					},
-					{
-						Type: "image_url",
-						ImageURL: &domain.ImageURLDetail{
-							URL: imageBase64,
-						},
-					},
-				},
-			})
-		} else {
-			messages = append(messages, domain.ChatMessage{
-				Role:    "user",
-				Content: content,
-			})
-		}
-	} else if imageBase64 != "" {
-		// Update last user message in multi-turn history to include vision image
-		if len(messages) > 0 && messages[len(messages)-1].Role == "user" {
-			lastMsg := messages[len(messages)-1]
-			textStr := lastMsg.GetStringContent()
-			log.Printf("[Conversation] Attaching multimodal image to last history user message (base64 length=%d)", len(imageBase64))
-			messages[len(messages)-1] = domain.ChatMessage{
-				Role: "user",
-				Content: []domain.ChatMessageContentPart{
-					{
-						Type: "text",
-						Text: textStr,
-					},
-					{
-						Type: "image_url",
-						ImageURL: &domain.ImageURLDetail{
-							URL: imageBase64,
-						},
-					},
-				},
-			}
-		}
-	}
-
 	opts := ai.ChatCompletionOptions{
 		Tools:          tools,
 		ResponseFormat: map[string]any{"type": "json_object"},
 	}
 
-	const maxEvalAttempts = 3
-	var finalContent string
+	// 7. Generation & Loop 2 Quality Critic Loop (Up to 4 Retries)
+	const maxAttempts = 4
+	var finalReplyText string
+	var finalVoiceScript string
+	var finalReactionEmoji string
+	var critiqueFeedback string
+	critiquePassed := false
 
-	for attempt := 1; attempt <= maxEvalAttempts; attempt++ {
-		log.Printf("[Conversation] Calling AI for user @%s in chat %s (attempt %d/%d, turns=%d)...", username, chatIDStr, attempt, maxEvalAttempts, len(messages))
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		log.Printf("[Conversation] Calling Gemini 3.8 Flash High (Attempt %d/%d)...", attempt, maxAttempts)
+
+		relationshipTier := "stranger"
+		if affectionScore >= 85 {
+			relationshipTier = "deeply_bonded"
+		} else if affectionScore >= 60 {
+			relationshipTier = "close_friend"
+		} else if affectionScore >= 35 {
+			relationshipTier = "casual_friend"
+		} else {
+			relationshipTier = "aloof"
+		}
+
+		userFacts := make(map[string]string)
+		textLower := strings.ToLower(text)
+		for _, marker := range []string{"i live in ", "rehta hoon ", "rehti hoon ", "from ", "se hoon "} {
+			if idx := strings.Index(textLower, marker); idx != -1 {
+				rem := strings.TrimSpace(text[idx+len(marker):])
+				words := strings.Fields(rem)
+				if len(words) > 0 {
+					userFacts["city"] = strings.Trim(words[0], ".,!?")
+				}
+				break
+			}
+		}
+		if strings.Contains(textLower, "college") || strings.Contains(textLower, "bca") || strings.Contains(textLower, "btech") || strings.Contains(textLower, "coding") {
+			userFacts["study_or_work"] = "Tech / Student"
+		}
+
+		sysPrompt := prompt.BuildDynamicSystemPrompt(prompt.SystemPromptParams{
+			Identity: prompt.IdentityParams{
+				Name:     h.botName,
+				Username: h.botUsername,
+				Gender:   "female",
+			},
+			IsAdmin:          isAdmin,
+			Username:         username,
+			FirstName:        msg.From.FirstName,
+			AffectionScore:   affectionScore,
+			RelationshipTier: relationshipTier,
+			UserFacts:        userFacts,
+			SearchContext:    searchContext,
+			CritiqueFeedback: critiqueFeedback,
+			Intent:           intent,
+			ShouldReact:      pre.ShouldReact,
+			SuggestedEmoji:   pre.ReactionEmoji,
+			HistoryContext:   historyContext,
+		})
+
+		messages := []domain.ChatMessage{
+			{Role: "system", Content: sysPrompt},
+		}
+
+		// Add recent history
+		for _, m := range recent {
+			isAssistant := m.UserID == "assistant" || strings.EqualFold(m.Username, h.botUsername) || strings.EqualFold(m.Username, h.botName)
+			if isAssistant {
+				messages = append(messages, domain.ChatMessage{Role: "assistant", Content: m.MessageText})
+			} else {
+				content := m.MessageText
+				if msg.Chat.Type != "private" && m.Username != "" {
+					content = fmt.Sprintf("%s: %s", m.Username, m.MessageText)
+				}
+				messages = append(messages, domain.ChatMessage{Role: "user", Content: content})
+			}
+		}
+
+		// Current turn
+		content := text
+		if content == "" && imageBase64 != "" {
+			content = "Look at this image"
+		}
+		if imageBase64 != "" {
+			messages = append(messages, domain.ChatMessage{
+				Role: "user",
+				Content: []domain.ChatMessageContentPart{
+					{Type: "text", Text: content},
+					{Type: "image_url", ImageURL: &domain.ImageURLDetail{URL: imageBase64}},
+				},
+			})
+		} else {
+			messages = append(messages, domain.ChatMessage{Role: "user", Content: content})
+		}
+
 		res, err := h.aiClient.ChatCompletions(ctx, messages, opts)
 		if err != nil || res == nil {
-			log.Printf("[Conversation] AI ChatCompletions error: %v", err)
-			return
+			log.Printf("[Conversation] AI error: %v", err)
+			continue
 		}
-		log.Printf("[Conversation] ===== AI RESPONSE (model=%s provider=%s) =====\n%s\n===== END AI RESPONSE =====", res.ModelUsed, res.ProviderURL, res.Message.GetStringContent())
 
-		// Handle Tool Calls if returned
+		// Handle Tool Calls immediately if triggered by model
 		if len(res.Message.ToolCalls) > 0 {
 			for _, tc := range res.Message.ToolCalls {
 				h.executeToolCall(ctx, msg, tc, isAdmin, messages, userIDStr, username, chatIDStr)
@@ -469,64 +452,211 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 			return
 		}
 
-		candidateContent := res.Message.GetStringContent()
+		rawResponse := res.Message.GetStringContent()
+		replyText, voiceScript, llmEmoji := parseDualOutput(rawResponse)
 
-		// OpenJev Quality Check Loop for text & voice note (AI-driven persona, tone, and quality review)
-		if h.decisionClient != nil {
-			var parsedResp domain.StructuredAIResponse
-			cleanJSON := extractCleanJSON(candidateContent)
-			_ = json.Unmarshal([]byte(cleanJSON), &parsedResp)
-
-			voiceScript := ""
-			if parsedResp.VoiceResponse != nil && parsedResp.VoiceResponse.ShouldSpeak {
-				voiceScript = parsedResp.VoiceResponse.TTSText
+		// Reaction decision
+		chosenEmoji := ""
+		if pre.ShouldReact {
+			chosenEmoji = pre.ReactionEmoji
+			if chosenEmoji == "" {
+				chosenEmoji = llmEmoji
 			}
-
-			eval, err := h.decisionClient.EvaluateResponse(ctx, text, parsedResp.ReplyText, voiceScript)
-			if err == nil {
-				if eval.Approved {
-					log.Printf("[Conversation] 🎯 OpenJev APPROVED response on attempt %d (conf=%.2f)", attempt, eval.Confidence)
-					finalContent = candidateContent
-					break
-				}
-
-				log.Printf("[Conversation] ⚠️ OpenJev REJECTED response on attempt %d (defect=%s, conf=%.2f). Retrying...",
-					attempt, eval.Defect, eval.Confidence)
-
-				if attempt < maxEvalAttempts {
-					feedbackText := eval.Feedback
-					if feedbackText == "" {
-						feedbackText = "Make your response shorter (4 to 12 words), more natural authentic Indian girl Hinglish (use casual words like 'yrr', 'acha', 'suno na'), and directly address what the user said."
-					}
-					critiqueMsg := fmt.Sprintf("OpenJev Quality Rejection (%s): %s Output revised JSON.", eval.Defect, feedbackText)
-					messages = append(messages,
-						domain.ChatMessage{Role: "assistant", Content: candidateContent},
-						domain.ChatMessage{Role: "user", Content: critiqueMsg},
-					)
-					continue
-				}
-			}
+		} else if llmEmoji != "" && (intent == "rude_abuse" || intent == "flirty") {
+			chosenEmoji = llmEmoji
 		}
 
-		finalContent = candidateContent
-		break
+		// Loop 2: Critique draft via Codiv OpenJev
+		critique := h.decisionClient.CritiqueDraft(ctx, text, replyText, intent)
+		log.Printf("[Conversation] OpenJev Loop 2 Critique (Attempt %d/%d): passed=%v feedback=%s",
+			attempt, maxAttempts, critique.Passed, critique.Feedback)
+
+		if critique.Passed {
+			finalReplyText = replyText
+			finalVoiceScript = voiceScript
+			finalReactionEmoji = chosenEmoji
+			critiquePassed = true
+			break
+		}
+
+		if attempt == maxAttempts {
+			finalReplyText = replyText
+			finalVoiceScript = voiceScript
+			finalReactionEmoji = chosenEmoji
+		} else {
+			critiqueFeedback = critique.Feedback
+			log.Printf("[Conversation] Draft rejected by critic. Retrying with feedback (attempt %d/%d): %s",
+				attempt, maxAttempts, critiqueFeedback)
+		}
 	}
 
-	if finalContent != "" {
-		h.parseAndDispatchResponse(ctx, msg, finalContent, text, userIDStr, username, chatIDStr)
+	// 8. AI Leakage & Character Safeguard Interceptor
+	aiLeakPhrases := []string{"as an ai", "i am an ai", "language model", "virtual assistant", "i do not engage", "cannot fulfill", "main ek bot", "i am a bot"}
+	hasAILeak := false
+	lowerReply := strings.ToLower(finalReplyText)
+	for _, phrase := range aiLeakPhrases {
+		if strings.Contains(lowerReply, phrase) {
+			hasAILeak = true
+			break
+		}
 	}
+
+	if hasAILeak || (intent == "rude_abuse" && !critiquePassed) {
+		log.Printf("[Conversation] AI leakage or failed abuse critique detected. Applying Chavi authentic persona recovery...")
+		if intent == "rude_abuse" {
+			retaliations := []struct{ text, voice string }{
+				{"chup kar chutiye, dimaag mat chaat mera. shakal dekhi hai apni aaine me? nikal 🖕", "[angry] चुप कर चूतिए... दिमाग मत चाट मेरा! शक्ल देखी है अपनी आईने में? निकल यहाँ से!"},
+				{"apni aukaat me rehke baat kar madarchod, samjha na? apna ghatiya dimaag kahin aur jaake chala 🖕", "[angry] अपनी औकात में रहके बात कर, समझा ना? निकल यहाँ से!"},
+				{"teri jaison ki aukaat do kaudi ki nahi hoti aur chale aate hain DM me bhaukne. nikal bhenchod 🖕", "[annoyed] तेरी जैसों की औकात दो कौड़ी की नहीं होती और चले आते हैं डी एम में भौंकने... निकल!"},
+			}
+			chosen := retaliations[rand.Intn(len(retaliations))]
+			finalReplyText = chosen.text
+			finalVoiceScript = chosen.voice
+			finalReactionEmoji = "🖕"
+		} else {
+			finalReplyText = "kya pagal ho gaya h kya yrr? dimag theek h tera? 🙄"
+			finalVoiceScript = "[sigh] क्या पागल हो गया है क्या यार? दिमाग ठीक है तेरा?"
+			finalReactionEmoji = "🙄"
+		}
+	}
+
+	// Normalize voice script emotion tags
+	finalVoiceScript = prompt.NormalizeEmotionTags(finalVoiceScript)
+	log.Printf("[Conversation] Final Text Draft: %q", finalReplyText)
+	log.Printf("[Conversation] Final Voice Script: %q", finalVoiceScript)
+	log.Printf("[Conversation] Reaction Emoji: %s", finalReactionEmoji)
+
+	// 9. Send emoji reaction if warranted
+	if finalReactionEmoji != "" {
+		h.setReaction(ctx, msg, finalReactionEmoji)
+	}
+
+	// 10. Deliver via STRICTLY ONE EXCLUSIVE CHANNEL (Text OR Voice OR Photo, never both!)
+	h.dispatchChannelOutput(ctx, msg, exclusiveChannel, finalReplyText, finalVoiceScript, text)
+}
+
+func (h *ConversationHandler) dispatchChannelOutput(
+	ctx context.Context,
+	msg *domain.TelegramMessage,
+	channel, replyText, voiceScript, userText string,
+) {
+	if channel == "voice_only" && strings.TrimSpace(voiceScript) != "" {
+		log.Printf("[Conversation] Exclusive Channel: VOICE_ONLY selected. Synthesizing Fish Audio audio...")
+		h.sendChatAction(ctx, msg.Chat.ID, msg.IsUserbot, "record_voice")
+		audioData, err := h.voiceService.GenerateVoice(ctx, voiceScript)
+		if err == nil && len(audioData) > 0 {
+			h.sendVoice(ctx, msg, audioData)
+			return
+		}
+		log.Printf("[Conversation] Voice synthesis failed (%v). Falling back to text DM...", err)
+	}
+
+	if channel == "photo_only" {
+		log.Printf("[Conversation] Exclusive Channel: PHOTO_ONLY selected. Generating selfie via ModelScope...")
+		go h.generateAndSendPhoto(context.Background(), msg, userText, replyText)
+		return
+	}
+
+	// Default: Text Only
+	cleanReply := sanitizeReplyText(finalTextFallback(replyText, userText))
+	if cleanReply != "" {
+		h.sendMessage(ctx, msg, cleanReply)
+	}
+}
+
+func finalTextFallback(replyText, userText string) string {
+	if strings.TrimSpace(replyText) != "" {
+		return replyText
+	}
+	return "kya scene hai yrr? batao na"
+}
+
+func parseDualOutput(raw string) (replyText, voiceScript, reactionEmoji string) {
+	clean := extractCleanJSON(raw)
+	var data struct {
+		ReplyText     string  `json:"reply_text"`
+		VoiceScript   string  `json:"voice_script"`
+		ReactionEmoji string  `json:"reaction_emoji"`
+		DynamicEmoji  *string `json:"dynamic_emoji"`
+		VoiceResponse *struct {
+			TTSText string `json:"tts_text"`
+		} `json:"voice_response"`
+	}
+
+	if err := json.Unmarshal([]byte(clean), &data); err == nil {
+		replyText = data.ReplyText
+		voiceScript = data.VoiceScript
+		if voiceScript == "" && data.VoiceResponse != nil {
+			voiceScript = data.VoiceResponse.TTSText
+		}
+		reactionEmoji = data.ReactionEmoji
+		if reactionEmoji == "" && data.DynamicEmoji != nil {
+			reactionEmoji = *data.DynamicEmoji
+		}
+	} else {
+		replyText = strings.TrimSpace(raw)
+	}
+
+	return strings.TrimSpace(replyText), strings.TrimSpace(voiceScript), strings.TrimSpace(reactionEmoji)
 }
 
 func extractCleanJSON(raw string) string {
 	clean := strings.TrimSpace(raw)
-	if idx := strings.Index(clean, "{"); idx != -1 {
-		if lastIdx := strings.LastIndex(clean, "}"); lastIdx != -1 && lastIdx > idx {
-			return clean[idx : lastIdx+1]
+	// Strip markdown code fences
+	clean = strings.TrimPrefix(clean, "```json")
+	clean = strings.TrimPrefix(clean, "```")
+	clean = strings.TrimSuffix(clean, "```")
+	clean = strings.TrimSpace(clean)
+
+	// Remove <think>...</think> if present
+	if thinkStart := strings.Index(clean, "<think>"); thinkStart != -1 {
+		if thinkEnd := strings.Index(clean, "</think>"); thinkEnd != -1 && thinkEnd > thinkStart {
+			clean = strings.TrimSpace(clean[thinkEnd+len("</think>"):])
 		}
 	}
+	// Remove Thinking Process: if present
+	if thinkIdx := strings.Index(clean, "Thinking Process:"); thinkIdx != -1 {
+		if dblNewline := strings.Index(clean[thinkIdx:], "\n\n"); dblNewline != -1 {
+			clean = strings.TrimSpace(clean[thinkIdx+dblNewline+2:])
+		}
+	}
+
+	// Try first { to last }
+	if idx := strings.Index(clean, "{"); idx != -1 {
+		if lastIdx := strings.LastIndex(clean, "}"); lastIdx != -1 && lastIdx > idx {
+			candidate := clean[idx : lastIdx+1]
+			var js map[string]any
+			if json.Unmarshal([]byte(candidate), &js) == nil {
+				return candidate
+			}
+		}
+	}
+
+	// Stack-based balanced brace search for the first valid JSON dict
+	depth := 0
+	start := -1
+	for i, r := range clean {
+		if r == '{' {
+			if depth == 0 {
+				start = i
+			}
+			depth++
+		} else if r == '}' {
+			if depth > 0 {
+				depth--
+				if depth == 0 && start != -1 {
+					candidate := clean[start : i+1]
+					var js map[string]any
+					if json.Unmarshal([]byte(candidate), &js) == nil {
+						return candidate
+					}
+				}
+			}
+		}
+	}
+
 	return clean
 }
-
 
 func (h *ConversationHandler) executeToolCall(
 	ctx context.Context,
@@ -544,6 +674,26 @@ func (h *ConversationHandler) executeToolCall(
 	_ = json.Unmarshal([]byte(argsJSON), &args)
 
 	switch name {
+	case "create_poll":
+		question, _ := args["question"].(string)
+		var options []string
+		if rawOpts, ok := args["options"].([]any); ok {
+			for _, o := range rawOpts {
+				if s, ok := o.(string); ok && strings.TrimSpace(s) != "" {
+					options = append(options, strings.TrimSpace(s))
+				}
+			}
+		}
+		isAnonymous, _ := args["is_anonymous"].(bool)
+		allowsMultiple, _ := args["allows_multiple_answers"].(bool)
+
+		if len(options) >= 2 && question != "" {
+			_, err := h.botClient.SendPoll(ctx, msg.Chat.ID, question, options, isAnonymous, allowsMultiple, msg.MessageID)
+			if err != nil {
+				log.Printf("[ToolCall:create_poll] Failed: %v", err)
+			}
+		}
+
 	case "web_search":
 		query, _ := args["query"].(string)
 		if query != "" {
@@ -553,7 +703,6 @@ func (h *ConversationHandler) executeToolCall(
 				searchRes = fmt.Sprintf("Search error: %v", err)
 			}
 
-			// Add assistant message with tool calls AND tool response to satisfy OpenAI API standard
 			toolMessages := append(history,
 				domain.ChatMessage{
 					Role:      "assistant",
@@ -569,8 +718,8 @@ func (h *ConversationHandler) executeToolCall(
 
 			finalRes, err := h.aiClient.ChatCompletions(ctx, toolMessages, ai.ChatCompletionOptions{})
 			if err == nil && finalRes != nil {
-				reply := finalRes.Message.GetStringContent()
-				h.parseAndDispatchResponse(ctx, msg, reply, query, userIDStr, username, chatIDStr)
+				reply, _, _ := parseDualOutput(finalRes.Message.GetStringContent())
+				h.sendMessage(ctx, msg, reply)
 			}
 		}
 
@@ -597,17 +746,10 @@ func (h *ConversationHandler) executeToolCall(
 }
 
 func (h *ConversationHandler) generateAndSendPhoto(ctx context.Context, msg *domain.TelegramMessage, rawPrompt, replyText string) {
-	cleanPrompt := strings.TrimSpace(rawPrompt)
-	if cleanPrompt == "" || strings.EqualFold(cleanPrompt, "null") || strings.EqualFold(cleanPrompt, "none") {
-		if replyText != "" {
-			h.sendMessage(ctx, msg, replyText)
-		}
-		return
-	}
-
 	h.sendChatAction(ctx, msg.Chat.ID, msg.IsUserbot, "upload_photo")
-	log.Printf("[Conversation] Generating image with AI prompt: %s", cleanPrompt)
-	img, err := h.imageService.GenerateImage(ctx, cleanPrompt)
+	log.Printf("[Conversation] Generating photo via ModelScope with prompt: %s", rawPrompt)
+
+	img, err := h.imageService.GenerateImage(ctx, rawPrompt)
 	if err != nil || img == nil {
 		log.Printf("[Conversation] Failed to generate image: %v", err)
 		if replyText != "" {
@@ -616,78 +758,15 @@ func (h *ConversationHandler) generateAndSendPhoto(ctx context.Context, msg *dom
 		return
 	}
 
+	caption := replyText
+	if caption == "" {
+		caption = "ye lo meri photo ✨"
+	}
+
 	if len(img.Data) > 0 {
-		h.sendPhoto(ctx, msg, img.Data, "", replyText)
+		h.sendPhoto(ctx, msg, img.Data, "", caption)
 	} else if img.URL != "" {
-		h.sendPhoto(ctx, msg, nil, img.URL, replyText)
-	}
-}
-
-func (h *ConversationHandler) parseAndDispatchResponse(
-	ctx context.Context,
-	msg *domain.TelegramMessage,
-	aiContent, userText, userIDStr, username, chatIDStr string,
-) {
-	// Try parsing JSON structure
-	cleanJSON := strings.TrimSpace(aiContent)
-	if idx := strings.Index(cleanJSON, "{"); idx != -1 {
-		if lastIdx := strings.LastIndex(cleanJSON, "}"); lastIdx != -1 && lastIdx > idx {
-			cleanJSON = cleanJSON[idx : lastIdx+1]
-		}
-	}
-
-	var resp domain.StructuredAIResponse
-	err := json.Unmarshal([]byte(cleanJSON), &resp)
-	if err != nil {
-		// Fallback: if json parsing failed, treat cleaned raw string as reply text
-		raw := strings.TrimSpace(aiContent)
-		if idx := strings.Index(raw, "{"); idx != -1 {
-			pre := strings.TrimSpace(raw[:idx])
-			if pre != "" {
-				raw = pre
-			}
-		}
-		resp = domain.StructuredAIResponse{
-			ShouldReply: true,
-			ReplyText:   raw,
-		}
-	}
-
-	// Update affection
-	if resp.AffectionChange != 0 {
-		_, _ = h.relRepo.UpdateAffection(ctx, chatIDStr, userIDStr, username, resp.AffectionChange)
-	}
-
-	if !resp.ShouldReply {
-		if resp.DynamicEmoji != nil && *resp.DynamicEmoji != "" {
-			h.setReaction(ctx, msg, *resp.DynamicEmoji)
-		}
-		return
-	}
-
-	// Handle selfie request if present (sends single photo message with caption)
-	if resp.SelfiePrompt != nil && *resp.SelfiePrompt != "" && !strings.EqualFold(*resp.SelfiePrompt, "null") && !strings.EqualFold(*resp.SelfiePrompt, "none") {
-		go h.generateAndSendPhoto(context.Background(), msg, *resp.SelfiePrompt, resp.ReplyText)
-		return
-	}
-
-	// Handle Voice generation if requested: Return ONLY voice note (do not send text reply alongside it)
-	if resp.VoiceResponse != nil && resp.VoiceResponse.ShouldSpeak && resp.VoiceResponse.TTSText != "" {
-		h.sendChatAction(ctx, msg.Chat.ID, msg.IsUserbot, "record_voice")
-		audioData, err := h.voiceService.GenerateVoice(ctx, resp.VoiceResponse.TTSText)
-		if err == nil && len(audioData) > 0 {
-			h.sendVoice(ctx, msg, audioData)
-			return
-		}
-	}
-
-
-	// Sanitize reply text
-	resp.ReplyText = sanitizeReplyText(resp.ReplyText)
-
-	// Send normal text reply
-	if resp.ReplyText != "" {
-		h.sendMessage(ctx, msg, resp.ReplyText)
+		h.sendPhoto(ctx, msg, nil, img.URL, caption)
 	}
 }
 
@@ -697,29 +776,12 @@ func sanitizeReplyText(text string) string {
 		return ""
 	}
 
-	// Strip hallucinated Fish Audio bracket tags like [flirty], [giggle], [whisper], [soft], etc.
 	tagRegex := regexp.MustCompile(`\[[a-zA-Z0-9_\-\s]+\]`)
 	t = tagRegex.ReplaceAllString(t, "")
 
-	// Strip asterisk roleplay actions like *smiles*, *laughs*, *blushes*
 	actionRegex := regexp.MustCompile(`\*[a-zA-Z0-9_\-\s]+\*`)
 	t = actionRegex.ReplaceAllString(t, "")
 
-	// Check for repeating bracket loops or runaway hallucinated tags (e.g. [2023][2023]...)
-	if strings.Count(t, "[") > 2 {
-		var cleanLines []string
-		for _, line := range strings.Split(t, "\n") {
-			l := strings.TrimSpace(line)
-			if strings.Count(l, "[") > 2 || strings.Contains(l, "[202") {
-				continue
-			}
-			cleanLines = append(cleanLines, l)
-		}
-		t = strings.TrimSpace(strings.Join(cleanLines, "\n"))
-	}
-
-	// Telegram limit safeguard
-	t = strings.TrimSpace(t)
 	if len(t) > 2000 {
 		t = strings.TrimSpace(t[:2000])
 	}
@@ -731,12 +793,10 @@ func (h *ConversationHandler) sendMessage(ctx context.Context, msg *domain.Teleg
 	_ = h.historyRepo.AddMessage(ctx, chatIDStr, "assistant", h.botUsername, text, "", strconv.Itoa(msg.MessageID))
 
 	if msg.IsUserbot && h.userbotSender != nil && h.userbotSender.IsAvailable() {
-		log.Printf("[Conversation] Sending reply from Userbot MTProto account to chat %d...", msg.Chat.ID)
 		err := h.userbotSender.SendMessage(ctx, msg.Chat.ID, text, msg.MessageID)
 		if err == nil {
 			return
 		}
-		log.Printf("⚠️ [Conversation] Userbot SendMessage failed: %v. Falling back to bot API...", err)
 	}
 
 	_, _ = h.botClient.SendMessage(ctx, msg.Chat.ID, text, telegram.SendMessageOptions{
@@ -753,12 +813,10 @@ func (h *ConversationHandler) sendPhoto(ctx context.Context, msg *domain.Telegra
 	_ = h.historyRepo.AddMessage(ctx, chatIDStr, "assistant", h.botUsername, photoRecordText, "", strconv.Itoa(msg.MessageID))
 
 	if msg.IsUserbot && h.userbotSender != nil && h.userbotSender.IsAvailable() {
-		log.Printf("[Conversation] Sending photo from Userbot MTProto account to chat %d...", msg.Chat.ID)
 		err := h.userbotSender.SendPhoto(ctx, msg.Chat.ID, photoData, photoURL, caption, msg.MessageID)
 		if err == nil {
 			return
 		}
-		log.Printf("⚠️ [Conversation] Userbot SendPhoto failed: %v. Falling back to bot API...", err)
 	}
 
 	if len(photoData) > 0 {
@@ -773,12 +831,10 @@ func (h *ConversationHandler) sendVoice(ctx context.Context, msg *domain.Telegra
 	_ = h.historyRepo.AddMessage(ctx, chatIDStr, "assistant", h.botUsername, "[Sent voice message]", "", strconv.Itoa(msg.MessageID))
 
 	if msg.IsUserbot && h.userbotSender != nil && h.userbotSender.IsAvailable() {
-		log.Printf("[Conversation] Sending voice from Userbot MTProto account to chat %d...", msg.Chat.ID)
 		err := h.userbotSender.SendVoice(ctx, msg.Chat.ID, voiceData, msg.MessageID)
 		if err == nil {
 			return
 		}
-		log.Printf("⚠️ [Conversation] Userbot SendVoice failed: %v. Falling back to bot API...", err)
 	}
 
 	_, _ = h.botClient.SendVoice(ctx, msg.Chat.ID, voiceData, msg.MessageID)
@@ -897,4 +953,11 @@ func (h *ConversationHandler) executeAdminTool(ctx context.Context, msg *domain.
 			_ = h.botClient.DeleteMessage(ctx, msg.Chat.ID, msg.MessageID-i)
 		}
 	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

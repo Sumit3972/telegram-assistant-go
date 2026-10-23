@@ -10,17 +10,25 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"telegram-ai-assistant/internal/prompt"
 )
 
 type VoiceService struct {
-	apiKey     string
-	httpClient *http.Client
+	apiKey      string
+	referenceID string
+	httpClient  *http.Client
 }
 
-func NewVoiceService(apiKey string) *VoiceService {
+func NewVoiceService(apiKey string, refID ...string) *VoiceService {
+	chosenRef := "ac315c50a9734bb7a608102fce24e601"
+	if len(refID) > 0 && strings.TrimSpace(refID[0]) != "" {
+		chosenRef = strings.TrimSpace(refID[0])
+	}
 	return &VoiceService{
-		apiKey:     apiKey,
-		httpClient: &http.Client{Timeout: 90 * time.Second},
+		apiKey:      apiKey,
+		referenceID: chosenRef,
+		httpClient:  &http.Client{Timeout: 90 * time.Second},
 	}
 }
 
@@ -36,19 +44,26 @@ func (s *VoiceService) GenerateVoice(ctx context.Context, text string) ([]byte, 
 		return nil, fmt.Errorf("FISH_AUDIO_API_KEY is not configured")
 	}
 
-	cleanText := strings.TrimSpace(text)
-	if len(cleanText) > 2000 {
-		cleanText = cleanText[:2000]
+	// 1. Normalize emotion tags to Fish Audio standard format ([sigh], [laughing], etc.)
+	normalizedText := prompt.NormalizeEmotionTags(text)
+	if len(normalizedText) > 2000 {
+		normalizedText = normalizedText[:2000]
 	}
 
+	log.Printf("[VoiceService:FishAudio] Synthesizing script: %q (VoiceRef=%s)", normalizedText, s.referenceID)
+
 	reqBody := TTSRequest{
-		Text:        cleanText,
-		ReferenceID: "a5ee840053874f6f9c5a612291b7ceb0",
+		Text:        normalizedText,
+		ReferenceID: s.referenceID,
 		Format:      "mp3",
 		Latency:     "balanced",
 	}
 
-	bodyBytes, _ := json.Marshal(reqBody)
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal TTS request: %w", err)
+	}
+
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.fish.audio/v1/tts", bytes.NewReader(bodyBytes))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create TTS request: %w", err)
@@ -74,6 +89,6 @@ func (s *VoiceService) GenerateVoice(ctx context.Context, text string) ([]byte, 
 		return nil, fmt.Errorf("failed to read audio stream: %w", err)
 	}
 
-	log.Printf("[TTS:FishAudio] Generated %d bytes of audio successfully", len(audioData))
+	log.Printf("[VoiceService:FishAudio] ✅ Generated %d bytes of audio successfully", len(audioData))
 	return audioData, nil
 }

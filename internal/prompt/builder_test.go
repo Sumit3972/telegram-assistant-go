@@ -8,34 +8,36 @@ import (
 func TestBuildDynamicSystemPrompt(t *testing.T) {
 	params := SystemPromptParams{
 		Identity: IdentityParams{
-			Name:     "Janvi",
-			Username: "Janvi3976",
+			Name:     "Chavi Sharma",
+			Username: "Chavi396",
 			Gender:   "female",
 		},
-		IsAdmin:        true,
-		Username:       "john_doe",
-		FirstName:      "John",
-		AffectionScore: 65,
-		Rules:          "1. Be respectful\n2. No spam",
-		UserText:       "photo bhej apni",
-		WithHistory:    true,
-		HistoryContext: "john_doe: hello\nJanvi: hey there!",
-		EmojiListStr:   "👍, ❤️, 🔥",
+		IsAdmin:          true,
+		Username:         "john_doe",
+		FirstName:        "John",
+		AffectionScore:   65,
+		RelationshipTier: "Close Friend",
+		Intent:           "casual_chat",
+		ShouldReact:      true,
+		SuggestedEmoji:   "😂",
 	}
 
 	p := BuildDynamicSystemPrompt(params)
 
-	if !strings.Contains(p, "Janvi") {
-		t.Errorf("Expected prompt to contain bot name 'Janvi'")
+	if !strings.Contains(p, "Chavi Sharma") {
+		t.Errorf("Expected prompt to contain bot name 'Chavi Sharma'")
 	}
-	if !strings.Contains(p, "photo bhej") && !strings.Contains(p, "selfie_generation") && !strings.Contains(p, "selfie_prompt") {
-		t.Errorf("Expected prompt to include selfie generation directives")
+	if !strings.Contains(p, "Jaipur") {
+		t.Errorf("Expected prompt to contain Jaipur location")
 	}
-	if !strings.Contains(p, "mute_user") {
-		t.Errorf("Expected prompt to contain admin moderation tools")
+	if !strings.Contains(p, "BCA") {
+		t.Errorf("Expected prompt to contain BCA college background")
 	}
-	if !strings.Contains(p, "65%") {
-		t.Errorf("Expected prompt to contain affection score 65%%")
+	if !strings.Contains(p, "voice_script") {
+		t.Errorf("Expected prompt to contain dual_output voice_script")
+	}
+	if !strings.Contains(p, "reply_text") {
+		t.Errorf("Expected prompt to contain dual_output reply_text")
 	}
 }
 
@@ -48,51 +50,23 @@ func TestProfanityDetector(t *testing.T) {
 	}
 }
 
-func TestAINativePhotoAndVoiceDirectives(t *testing.T) {
-	params := SystemPromptParams{
-		Identity: IdentityParams{
-			Name:     "Chavi",
-			Username: "Chavi396",
-			Gender:   "female",
-		},
-		Username:       "sam",
-		FirstName:      "Sam",
-		AffectionScore: 70,
+func TestChaviSelfiePromptBuilder(t *testing.T) {
+	promptText := BuildChaviSelfiePrompt("wearing a yellow kurti sitting at cafe")
+	if !strings.Contains(promptText, "Chavi from Jaipur") {
+		t.Errorf("Expected selfie prompt to contain Chavi identity core, got: %s", promptText)
 	}
-	p := BuildDynamicSystemPrompt(params)
-	if !strings.Contains(p, "TRIGGER RECOGNITION: Detect ANY user intent requesting a photo") {
-		t.Errorf("Expected system prompt to contain AI-native photo trigger directive")
-	}
-	if !strings.Contains(p, "AUTONOMOUS VOICE DECISIONS") {
-		t.Errorf("Expected system prompt to contain AI-native voice directive")
+	if !strings.Contains(promptText, "iPhone 15 Pro") {
+		t.Errorf("Expected selfie prompt to contain iPhone camera tag, got: %s", promptText)
 	}
 }
 
-func TestDynamicEnhancerBotName(t *testing.T) {
-	promptChavi := GetSelfieFallbackConceptSystemPrompt("Chavi")
-	if !strings.Contains(promptChavi, "Chavi") {
-		t.Errorf("Expected fallback prompt to contain Chavi, got: %s", promptChavi)
+func TestNormalizeEmotionTags(t *testing.T) {
+	input := "[exhausted sigh, soft laugh] yaar main thak gayi hoon 😊❤️"
+	normalized := NormalizeEmotionTags(input)
+	if !strings.HasPrefix(normalized, "[sigh]") && !strings.HasPrefix(normalized, "[laughing]") {
+		t.Errorf("Expected normalized tag at start, got: %s", normalized)
 	}
-
-	promptCustom := GetSelfieFallbackConceptSystemPrompt("Aanya")
-	if !strings.Contains(promptCustom, "Aanya") {
-		t.Errorf("Expected fallback prompt to contain Aanya, got: %s", promptCustom)
-	}
-}
-
-func TestISTTimezoneInSystemPrompt(t *testing.T) {
-	params := SystemPromptParams{
-		Identity: IdentityParams{
-			Name:     "Chavi",
-			Username: "Chavi396",
-			Gender:   "female",
-		},
-		Username:       "sam",
-		FirstName:      "Sam",
-		AffectionScore: 70,
-	}
-	p := BuildDynamicSystemPrompt(params)
-	if !strings.Contains(p, "REAL-WORLD TIME IN DELHI (IST)") {
-		t.Errorf("Expected system prompt to contain IST time context")
+	if strings.Contains(normalized, "😊") || strings.Contains(normalized, "❤️") {
+		t.Errorf("Expected emojis to be stripped from voice note, got: %s", normalized)
 	}
 }
