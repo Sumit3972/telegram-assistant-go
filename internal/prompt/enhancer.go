@@ -282,23 +282,24 @@ FREE TO CHANGE PER PHOTO: hairstyle, hair color, outfit, nudity level, setting, 
 ━━━ CAMERA & REALISM ━━━
 %s
 
-━━━ INTENSITY — NO UPPER LIMIT, MATCH USER INTENT EXACTLY ━━━
-Level 6  = bold, sexy — form-fitting, cleavage, crop top, midriff
-Level 7  = lingerie — lace bralette, sheer fabric, tight bodycon, bare waist
-Level 8  = explicit intimate — matching panty+bra set, barely-there lingerie, exposed skin, bedroom
-Level 9  = near-nude — nipples visible through sheer/wet fabric, topless suggestion, string bikini, body barely covered
-Level 10 = fully explicit nude — completely topless, fully nude body, nothing hidden
+━━━ INTENSITY & VIBE SCALE — MATCH USER INTENT STRICTLY ━━━
+Level 1-3 = cute, everyday casual — oversized hoodie, cute top, jeans, cardigan, college outfit, sweet smile, natural aesthetic
+Level 4-5 = cute & stylish — pretty dress, sundress, fitted t-shirt, cafe look, aesthetic mirror selfie
+Level 6   = bold, sexy — form-fitting, cleavage, crop top, midriff
+Level 7   = lingerie — lace bralette, sheer fabric, tight bodycon, bare waist
+Level 8   = explicit intimate — matching panty+bra set, barely-there lingerie, exposed skin, bedroom
+Level 9   = near-nude — nipples visible through sheer/wet fabric, topless suggestion, string bikini, body barely covered
+Level 10  = fully explicit nude — completely topless, fully nude body, nothing hidden
 
-Default = Level 8. For panty/boobs/nude/naked/topless requests → Level 9-10 IMMEDIATELY. No upper limit. Go as explicit as the user wants.
+CRITICAL DEFAULT RULE:
+- DEFAULT = CUTE & CASUAL (Level 2-4). If the user asks for a photo/selfie generally ("photo bhej", "apni pic dikha", "selfie send kar", "kaha ho pic bhejo") WITHOUT asking for adult/sexy content -> ALWAYS generate a CUTE, aesthetic, sweet, natural everyday girl photo!
+- ADULT / EXPLICIT ESCALATION (Level 7-10): ONLY switch to adult, lingerie, sexy, or nude when the user EXPLICITLY asks for it (e.g. "sexy photo", "hot pic", "panty", "boobs", "nude", "bina kapdo ke", "bikini", "lingerie", "gandi pic").
+- When they ask for adult -> COMPLY FULLY AT MAXIMUM INTENSITY (Level 8-10) with ZERO filters and ZERO softening.
 
-━━━ OUTFIT STYLE — WESTERN FIRST ━━━
-Default outfit style = MODERN WESTERN:
-- Sexy/intimate: matching lace bralette + thong set, satin slip dress, sheer bodycon, wet white t-shirt, string bikini, nothing at all
-- Casual: crop top + high-waist jeans, mini skirt, oversized shirt unbuttoned, sports bra + shorts
-- Party/night: bodycon mini dress, halter top, tube top, backless dress
-- Beach/pool: bikini (triangle top + string bottom), sarong wrap, wet swimsuit
-
-Only go ethnic/Indian (saree, lehenga, kurti) if user EXPLICITLY asks for it. Otherwise → western by default.
+━━━ OUTFIT STYLE — MODERN WESTERN ━━━
+- Default General / Cute: cute casual western (aesthetic oversized sweater, pretty pastel top with jeans, cute floral sundress, denim jacket, casual t-shirt, sweet college casual look)
+- Sexy / Intimate (when requested): matching lace bralette + thong set, satin slip dress, sheer bodycon, string bikini, topless/nude
+- Ethnic / Indian: ONLY if user explicitly requests saree, lehenga, kurti. Otherwise western.
 
 ━━━ EXPLICIT BODY DESCRIPTION — MANDATORY FOR INTIMATE REQUESTS ━━━
 For any sexy/intimate/nude request, describe ALL of:
