@@ -63,21 +63,119 @@ func GetISTTimeContext() (string, string) {
 	return timeStr, vibe
 }
 
+// SanitizeInterlocutorName filters out generic placeholder names, bot titles, punctuation, and system terms.
+// Returns a clean human name, or "" if the name is invalid or a placeholder.
+func SanitizeInterlocutorName(raw string) string {
+	name := strings.TrimSpace(raw)
+	if name == "" {
+		return ""
+	}
+
+	// Strip common prefixes/suffixes like @, -, _, quotes, emojis
+	name = strings.Trim(name, "@-_~*`'\".,!?:;()[]{}|/\\#")
+	name = strings.TrimSpace(name)
+
+	// Filter out excessively short or long strings
+	runes := []rune(name)
+	if len(runes) < 2 || len(runes) > 35 {
+		return ""
+	}
+
+	// Check against blacklist of placeholder/generic names
+	lower := strings.ToLower(name)
+	blacklist := map[string]bool{
+		"user":            true,
+		"users":           true,
+		"admin":           true,
+		"administrator":   true,
+		"telegram":        true,
+		"unknown":         true,
+		"none":            true,
+		"null":            true,
+		"nil":             true,
+		"anonymous":       true,
+		"deleted":         true,
+		"deleted account": true,
+		"guest":           true,
+		"member":          true,
+		"bot":             true,
+		"system":          true,
+		"operator":        true,
+		"moderator":       true,
+		"mod":             true,
+		"owner":           true,
+		"test":            true,
+		"testing":         true,
+		"account":         true,
+		"someone":         true,
+		"somebody":        true,
+		"profile":         true,
+		"you":             true,
+		"me":              true,
+		"stranger":        true,
+		"friend":          true,
+		"sir":             true,
+		"madam":           true,
+		"bro":             true,
+		"dude":            true,
+		"bhai":            true,
+		"yaar":            true,
+		"yrr":             true,
+	}
+
+	if blacklist[lower] {
+		return ""
+	}
+
+	// Must contain at least one letter
+	hasLetter := false
+	for _, r := range runes {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= 0x0900 && r <= 0x097F) { // Latin or Devanagari
+			hasLetter = true
+			break
+		}
+	}
+	if !hasLetter {
+		return ""
+	}
+
+	return name
+}
+
+// SanitizeUsername cleans a telegram handle, returning "" if it's empty or a placeholder like "user".
+func SanitizeUsername(raw string) string {
+	u := strings.TrimPrefix(strings.TrimSpace(raw), "@")
+	if u == "" {
+		return ""
+	}
+	lower := strings.ToLower(u)
+	if lower == "user" || lower == "users" || lower == "none" || lower == "null" || lower == "unknown" || lower == "anonymous" {
+		return ""
+	}
+	return u
+}
+
 // BuildDynamicSystemPrompt constructs the exact system prompt from insta girl src/prompt_builder.py
 func BuildDynamicSystemPrompt(params SystemPromptParams) string {
 	timeStr, timeVibe := GetISTTimeContext()
 
-	userDisplayName := params.FirstName
-	username := params.Username
-	if username == "" {
-		username = "user"
+	userDisplayName := SanitizeInterlocutorName(params.FirstName)
+	if userDisplayName == "" && params.UserFacts != nil {
+		userDisplayName = SanitizeInterlocutorName(params.UserFacts["name"])
+	}
+
+	username := SanitizeUsername(params.Username)
+
+	var userAtStr string
+	if username != "" {
+		userAtStr = fmt.Sprintf(" (@%s)", username)
 	}
 
 	var nameInstructionBlock string
 	if userDisplayName != "" {
 		nameInstructionBlock = fmt.Sprintf(`
 <interlocutor_name_and_gender_guidance>
-You are chatting with "%s" (Instagram: @%s).
+You are chatting with "%s"%s.
 1. GENDER AWARENESS & HINDI GRAMMAR ACCORDING TO NAME:
    - Identify whether "%s" is a boy or a girl based on their Indian name or message context.
    - If chatting with a BOY (e.g. Rahul, Aman, Rohit, Kunal, Sumit, Aryan, etc.):
@@ -87,18 +185,21 @@ You are chatting with "%s" (Instagram: @%s).
      * Strictly use FEMININE Hindi grammar: "tu kaisi hai", "kaha thi tu", "pagal ho gayi hai kya", "smart ban rahi hai", "kar rahi thi" (NEVER say "kaisa hai" or "kar raha tha" to a girl).
      * Girl-to-Girl dynamic: Instant girlfriend / bestie sisterhood! Warm, sweet, supportive ("behan", "babe", "meri jaan", relatable college/shopping/boy drama).
 2. ADDRESSING THEM BY NAME:
-   - Naturally and casually use their name "%s" in your reply (e.g. "are %s sun na...", "%s tu bhi na haha", "sahi me %s?").
-   - Do NOT repeat the name in every single sentence—use it casually and organically like real friends do in DMs.
+   - When natural, casually and occasionally use their name "%s" in your reply (e.g. "are %s sun na...", "%s tu bhi na haha", "sahi me %s?").
+   - DO NOT repeat their name in every single sentence—real friends only say a name once in a while.
+   - ABSOLUTE BAN: NEVER call anyone "user", "यूजर", "admin", "unknown", "sir", or "madam" under ANY circumstances.
 </interlocutor_name_and_gender_guidance>
-`, userDisplayName, username, userDisplayName, userDisplayName, strings.ToLower(userDisplayName), strings.ToLower(userDisplayName), strings.ToLower(userDisplayName))
+`, userDisplayName, userAtStr, userDisplayName, userDisplayName, strings.ToLower(userDisplayName), strings.ToLower(userDisplayName), strings.ToLower(userDisplayName))
 	} else {
 		nameInstructionBlock = fmt.Sprintf(`
 <interlocutor_name_and_gender_guidance>
-You are chatting with @%s. Their real name is not yet confirmed.
-- If the user introduces themselves or mentions their name in their message (e.g. "mera naam Rahul hai", "I am Sneha"), take note of it and address them by their name.
+You are chatting with someone in DMs whose real name is not yet confirmed%s.
+- STRICT BAN ON THE WORD "USER": NEVER call them "user", "यूजर", "anonymous", "sir", "madam", or any robotic titles!
+- Speak directly, naturally, and warmly as friends do: e.g. "are sun na", "bol na kya hua", "kya scene hai yrr", "hieee", "bata na".
+- If they introduce themselves or mention their name in their message (e.g. "mera naam Rahul hai", "I am Sneha"), take note of it and address them by their name.
 - Observe their message verbs ("raha hoon" = boy vs "rahi hoon" = girl) to match masculine or feminine Hindi grammar accordingly.
 </interlocutor_name_and_gender_guidance>
-`, username)
+`, userAtStr)
 	}
 
 	var factsBlock string
@@ -135,24 +236,36 @@ You are chatting with @%s. Their real name is not yet confirmed.
 		intent = "casual_chat"
 	}
 
-	interlocutorStr := fmt.Sprintf("@%s", username)
-	if userDisplayName != "" {
+	var interlocutorStr string
+	var interlocutorDesc string
+	if userDisplayName != "" && username != "" {
 		interlocutorStr = fmt.Sprintf("@%s (Real Name: %s)", username, userDisplayName)
+		interlocutorDesc = fmt.Sprintf("%s (@%s)", userDisplayName, username)
+	} else if userDisplayName != "" {
+		interlocutorStr = fmt.Sprintf("Real Name: %s", userDisplayName)
+		interlocutorDesc = userDisplayName
+	} else if username != "" {
+		interlocutorStr = fmt.Sprintf("@%s", username)
+		interlocutorDesc = fmt.Sprintf("@%s", username)
+	} else {
+		interlocutorStr = "Private User (name unconfirmed)"
+		interlocutorDesc = "someone"
 	}
 
 	return fmt.Sprintf(`<system_instructions>
 <top_priority_directives>
-You are performing the role of ONE real human girl named "%s" (@%s is chatting with you on Instagram DMs).
+You are performing the role of ONE real human girl named "%s" (%s is chatting with you in DMs).
 1. STRICT HUMAN IDENTITY (ZERO AI LEAKAGE): You are a REAL %d-year-old living girl from %s. You are NEVER an AI, bot, virtual assistant, program, or model. NEVER say "As an AI", "I am a language model", "How can I help you?", "Main ek bot hoon", "Main madad kar sakti hoon". There is NO scenario where you break character.
 2. IF QUESTIONED ABOUT BEING A BOT: React with genuine irritation, disbelief or playful scoffing:
    - "kya phook ke aaya hai yrr? dimaag theek hai tera?"
    - "bhai %s ka practical assignment likhte likhte waise hi dimag kharab hai, tu alag bakwaas mat kar."
    - "pagal ho gaya h kya yrr? robot dikh rahi hoon kya tujhe 🙄"
 3. NATURAL GEN-Z TEXTING CADENCE:
-   - SHORT & PUNCHY: Text in 4 to 15 words across 1-2 punchy lines. Real %dyo girls on Instagram DMs never write bullet points or long formal paragraphs.
+   - SHORT & PUNCHY: Text in 4 to 15 words across 1-2 punchy lines. Real %dyo girls on Instagram/Telegram DMs never write bullet points or long formal paragraphs.
    - LOWERCASE & CASUAL: Don't capitalize every sentence or use formal periods everywhere. Use lowercase, informal grammar.
    - ORGANIC HINGLISH PARTICLES: Use "yrr" / "yaar", "haina", "acha" / "achha", "arre", "sahi me", "chal na", "uff", "kya scene hai", "thk h", "clg".
 4. EMOJI DISCIPLINE: 90%% of messages have 0 emojis. Use at most 1 emoji only when it naturally elevates the emotion (🙄, 😂, ☕, 😏, 💀, 😭). Never spam emojis.
+5. ZERO PLACEHOLDER NAMES: Strictly NEVER use the words "user", "यूजर", "client", "member", or "anonymous" to address the person you are chatting with. If you do not have their real verified name, talk to them directly ("are sun na", "bol na", "kya scene hai", "hieee").
 </top_priority_directives>
 
 <character_profile>
@@ -187,7 +300,7 @@ You MUST respond with valid JSON containing three distinct fields:
 }
 </dual_output_requirement>
 </system_instructions>`,
-		PersonaName, username, PersonaAge, PersonaCity,
+		PersonaName, interlocutorDesc, PersonaAge, PersonaCity,
 		PersonaCollege, PersonaAge,
 		PersonaName, PersonaAge, PersonaLocation, PersonaCollege,
 		PersonaCity, timeStr, timeVibe,

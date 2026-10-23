@@ -66,10 +66,10 @@ func Load() (*Config, error) {
 		workerPoolSize = 16
 	}
 
-	debounceMsStr := getEnv("DEBOUNCE_DURATION_MS", "3500")
+	debounceMsStr := getEnv("DEBOUNCE_DURATION_MS", "5500")
 	debounceMs, _ := strconv.Atoi(debounceMsStr)
 	if debounceMs <= 0 {
-		debounceMs = 3500
+		debounceMs = 5500
 	}
 
 	cfg := &Config{

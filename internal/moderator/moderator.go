@@ -102,6 +102,7 @@ func NewModerator(
 			aiClient, imgService, voiceService, searchService, musicService,
 			historyRepo, relRepo, groupRepo, adminRepo, warningRepo, modLogRepo,
 			botClient, cfg.MyPersonalName, cfg.MyPersonalUsername, cfg.AIAPIKey, cfg.CodivAPIKey,
+			time.Duration(cfg.DebounceDurationMs)*time.Millisecond,
 		),
 		bootTime: time.Now().Add(-30 * time.Second).Unix(),
 	}

@@ -29,28 +29,30 @@ type messageBatch struct {
 }
 
 const (
-	debounceDuration = 3500 * time.Millisecond // wait 3.5s for user to finish typing multiple rapid messages
-	maxBatchWait     = 7000 * time.Millisecond // maximum ceiling delay before flushing
+	defaultDebounceDuration = 5500 * time.Millisecond // wait 5.5s for user to finish typing multiple rapid messages (matches Instagram debounce)
+	defaultMaxBatchWait     = 12000 * time.Millisecond // maximum ceiling delay before flushing
 )
 
 type ConversationHandler struct {
-	aiClient       *ai.Client
-	decisionClient *decision.Client
-	imageService   *media.ImageService
-	voiceService   *media.VoiceService
-	searchService  *media.SearchService
-	musicService   *media.MusicService
-	historyRepo    domain.HistoryRepository
-	relRepo        domain.RelationshipRepository
-	groupRepo      domain.GroupRepository
-	adminRepo      domain.AdminRepository
-	warningRepo    domain.WarningRepository
-	modLogRepo     domain.ModerationLogRepository
-	botClient      *telegram.BotClient
-	userbotSender  domain.UserbotSender
-	botName        string
-	botUsername    string
-	fallbackKey    string
+	aiClient         *ai.Client
+	decisionClient   *decision.Client
+	imageService     *media.ImageService
+	voiceService     *media.VoiceService
+	searchService    *media.SearchService
+	musicService     *media.MusicService
+	historyRepo      domain.HistoryRepository
+	relRepo          domain.RelationshipRepository
+	groupRepo        domain.GroupRepository
+	adminRepo        domain.AdminRepository
+	warningRepo      domain.WarningRepository
+	modLogRepo       domain.ModerationLogRepository
+	botClient        *telegram.BotClient
+	userbotSender    domain.UserbotSender
+	botName          string
+	botUsername      string
+	fallbackKey      string
+	debounceDuration time.Duration
+	maxBatchWait     time.Duration
 
 	batchMu sync.Mutex
 	batches map[string]*messageBatch
@@ -74,37 +76,46 @@ func NewConversationHandler(
 	modLogRepo domain.ModerationLogRepository,
 	botClient *telegram.BotClient,
 	botName, botUsername, fallbackKey, codivKey string,
+	debounceDuration time.Duration,
 ) *ConversationHandler {
+	if debounceDuration <= 0 {
+		debounceDuration = defaultDebounceDuration
+	}
+	maxBatchWait := debounceDuration * 2
+	if maxBatchWait < defaultMaxBatchWait {
+		maxBatchWait = defaultMaxBatchWait
+	}
+
 	return &ConversationHandler{
-		aiClient:       aiClient,
-		decisionClient: decision.NewClient(codivKey),
-		imageService:   imageService,
-		voiceService:   voiceService,
-		searchService:  searchService,
-		musicService:   musicService,
-		historyRepo:    historyRepo,
-		relRepo:        relRepo,
-		groupRepo:      groupRepo,
-		adminRepo:      adminRepo,
-		warningRepo:    warningRepo,
-		modLogRepo:     modLogRepo,
-		botClient:      botClient,
-		botName:        botName,
-		botUsername:    botUsername,
-		fallbackKey:    fallbackKey,
-		batches:        make(map[string]*messageBatch),
+		aiClient:         aiClient,
+		decisionClient:   decision.NewClient(codivKey),
+		imageService:     imageService,
+		voiceService:     voiceService,
+		searchService:    searchService,
+		musicService:     musicService,
+		historyRepo:      historyRepo,
+		relRepo:          relRepo,
+		groupRepo:        groupRepo,
+		adminRepo:        adminRepo,
+		warningRepo:      warningRepo,
+		modLogRepo:       modLogRepo,
+		botClient:        botClient,
+		botName:          botName,
+		botUsername:      botUsername,
+		fallbackKey:      fallbackKey,
+		debounceDuration: debounceDuration,
+		maxBatchWait:     maxBatchWait,
+		batches:          make(map[string]*messageBatch),
 	}
 }
 
 // EnqueueConversation buffers rapid sequential messages from the same user into a unified context
 // so the AI replies once to the entire combined thought instead of sending fragmented, repetitive replies.
+// Note: We do NOT trigger typing action while buffering; typing action only begins when debounce finishes and processing starts.
 func (h *ConversationHandler) EnqueueConversation(ctx context.Context, msg *domain.TelegramMessage, isAdmin bool) {
 	if msg == nil || msg.From == nil {
 		return
 	}
-
-	// Trigger typing indicator immediately so user sees "Chavi is typing..."
-	h.sendChatAction(ctx, msg.Chat.ID, msg.IsUserbot, "typing")
 
 	key := fmt.Sprintf("%d:%d", msg.Chat.ID, msg.From.ID)
 	text := strings.TrimSpace(msg.Text)
@@ -130,19 +141,19 @@ func (h *ConversationHandler) EnqueueConversation(ctx context.Context, msg *doma
 		}
 
 		// Check if batch ceiling has been reached
-		if time.Since(batch.firstTime) >= maxBatchWait {
+		if time.Since(batch.firstTime) >= h.maxBatchWait {
 			log.Printf("[Conversation] ⏰ Batch ceiling reached for %s. Flushing %d messages immediately...", key, len(batch.messages))
 			delete(h.batches, key)
 			go h.processBatch(batch)
 			return
 		}
 
-		// Reset debounce timer to 3.5 seconds
-		batch.timer = time.AfterFunc(debounceDuration, func() {
+		// Reset debounce timer to debounceDuration (e.g. 5.5s)
+		batch.timer = time.AfterFunc(h.debounceDuration, func() {
 			h.flushBatch(key)
 		})
-		log.Printf("[Conversation] ⏳ Buffered message %d from @%s in chat %d (waiting %v for more messages)...",
-			len(batch.messages), msg.From.Username, msg.Chat.ID, debounceDuration)
+		log.Printf("[Conversation] ⏳ Buffered message %d from chat %d (waiting %v for more messages)...",
+			len(batch.messages), msg.Chat.ID, h.debounceDuration)
 		return
 	}
 
@@ -159,11 +170,13 @@ func (h *ConversationHandler) EnqueueConversation(ctx context.Context, msg *doma
 		firstTime: time.Now(),
 	}
 
-	newBatch.timer = time.AfterFunc(debounceDuration, func() {
+	newBatch.timer = time.AfterFunc(h.debounceDuration, func() {
 		h.flushBatch(key)
 	})
 
 	h.batches[key] = newBatch
+	log.Printf("[Conversation] ⏳ Started debounce buffer in chat %d (waiting %v for burst messages)...",
+		msg.Chat.ID, h.debounceDuration)
 }
 
 func (h *ConversationHandler) HasActiveBatch(chatID, userID int64) bool {
@@ -220,11 +233,14 @@ func (h *ConversationHandler) processBatch(batch *messageBatch) {
 		}
 	}
 
-	uName := mergedMsg.From.Username
+	uName := prompt.SanitizeUsername(mergedMsg.From.Username)
 	if uName == "" {
-		uName = mergedMsg.From.FirstName
+		uName = prompt.SanitizeInterlocutorName(mergedMsg.From.FirstName)
 	}
-	log.Printf("[Conversation] 📦 Aggregated %d rapid messages from @%s into single context:\n%s",
+	if uName == "" {
+		uName = fmt.Sprintf("ID:%d", mergedMsg.From.ID)
+	}
+	log.Printf("[Conversation] 📦 Aggregated %d rapid messages from %s into single context:\n%s",
 		len(batch.messages), uName, mergedMsg.Text)
 
 	h.HandleConversation(context.Background(), &mergedMsg, batch.isAdmin)
@@ -248,9 +264,18 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 
 	chatIDStr := fmt.Sprintf("%d", msg.Chat.ID)
 	userIDStr := fmt.Sprintf("%d", msg.From.ID)
-	username := msg.From.Username
-	if username == "" {
-		username = msg.From.FirstName
+	cleanUsername := prompt.SanitizeUsername(msg.From.Username)
+	cleanFirstName := prompt.SanitizeInterlocutorName(msg.From.FirstName)
+	if cleanFirstName == "" && msg.From.LastName != "" {
+		cleanFirstName = prompt.SanitizeInterlocutorName(msg.From.LastName)
+	}
+
+	displayUser := cleanUsername
+	if displayUser == "" {
+		displayUser = cleanFirstName
+	}
+	if displayUser == "" {
+		displayUser = fmt.Sprintf("user_%d", msg.From.ID)
 	}
 
 	h.sendChatAction(ctx, msg.Chat.ID, msg.IsUserbot, "typing")
@@ -289,7 +314,7 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 
 	// Update affection
 	if pre.AffectionDelta != 0 {
-		_, _ = h.relRepo.UpdateAffection(ctx, chatIDStr, userIDStr, username, pre.AffectionDelta)
+		_, _ = h.relRepo.UpdateAffection(ctx, chatIDStr, userIDStr, displayUser, pre.AffectionDelta)
 	}
 
 	// Auto-align exclusive channel if user asks for photo or voice
@@ -369,6 +394,23 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 
 		userFacts := make(map[string]string)
 		textLower := strings.ToLower(text)
+
+		// Check if user introduced their real name in the conversation
+		for _, marker := range []string{"mera naam ", "my name is ", "i am ", "naam hai mera ", "this is "} {
+			if idx := strings.Index(textLower, marker); idx != -1 {
+				rem := strings.TrimSpace(text[idx+len(marker):])
+				words := strings.Fields(rem)
+				if len(words) > 0 {
+					extracted := prompt.SanitizeInterlocutorName(words[0])
+					if extracted != "" {
+						cleanFirstName = extracted
+						userFacts["name"] = extracted
+					}
+				}
+				break
+			}
+		}
+
 		for _, marker := range []string{"i live in ", "rehta hoon ", "rehti hoon ", "from ", "se hoon "} {
 			if idx := strings.Index(textLower, marker); idx != -1 {
 				rem := strings.TrimSpace(text[idx+len(marker):])
@@ -390,8 +432,8 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 				Gender:   "female",
 			},
 			IsAdmin:          isAdmin,
-			Username:         username,
-			FirstName:        msg.From.FirstName,
+			Username:         cleanUsername,
+			FirstName:        cleanFirstName,
 			AffectionScore:   affectionScore,
 			RelationshipTier: relationshipTier,
 			UserFacts:        userFacts,
@@ -447,7 +489,7 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 		// Handle Tool Calls immediately if triggered by model
 		if len(res.Message.ToolCalls) > 0 {
 			for _, tc := range res.Message.ToolCalls {
-				h.executeToolCall(ctx, msg, tc, isAdmin, messages, userIDStr, username, chatIDStr)
+				h.executeToolCall(ctx, msg, tc, isAdmin, messages, userIDStr, displayUser, chatIDStr)
 			}
 			return
 		}

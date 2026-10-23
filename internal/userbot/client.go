@@ -162,22 +162,28 @@ func (ub *UserbotManager) Start(ctx context.Context) error {
 		}
 
 		senderID := int64(0)
-		firstName := "User"
+		firstName := ""
 		username := ""
 		var inputPeer tg.InputPeerClass
 
 		if peerUser, ok := msg.FromID.(*tg.PeerUser); ok {
 			senderID = peerUser.UserID
 			if u, ok := e.Users[senderID]; ok {
-				firstName = u.FirstName
-				username = u.Username
+				firstName = strings.TrimSpace(u.FirstName)
+				if firstName == "" && u.LastName != "" {
+					firstName = strings.TrimSpace(u.LastName)
+				}
+				username = strings.TrimSpace(u.Username)
 				inputPeer = u.AsInputPeer()
 			}
 		} else if peerUser, ok := msg.PeerID.(*tg.PeerUser); ok {
 			senderID = peerUser.UserID
 			if u, ok := e.Users[senderID]; ok {
-				firstName = u.FirstName
-				username = u.Username
+				firstName = strings.TrimSpace(u.FirstName)
+				if firstName == "" && u.LastName != "" {
+					firstName = strings.TrimSpace(u.LastName)
+				}
+				username = strings.TrimSpace(u.Username)
 				inputPeer = u.AsInputPeer()
 			}
 		}

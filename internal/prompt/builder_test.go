@@ -41,6 +41,66 @@ func TestBuildDynamicSystemPrompt(t *testing.T) {
 	}
 }
 
+func TestSanitizeInterlocutorName(t *testing.T) {
+	cases := []struct {
+		input    string
+		expected string
+	}{
+		{"User", ""},
+		{"user", ""},
+		{"USERS", ""},
+		{"Admin", ""},
+		{"unknown", ""},
+		{"none", ""},
+		{"null", ""},
+		{"telegram", ""},
+		{"anonymous", ""},
+		{"deleted account", ""},
+		{"@", ""},
+		{"-", ""},
+		{"", ""},
+		{"Sumit", "Sumit"},
+		{"Rahul", "Rahul"},
+		{"Priya", "Priya"},
+		{"@Aman", "Aman"},
+		{"  Rohit  ", "Rohit"},
+	}
+
+	for _, c := range cases {
+		got := SanitizeInterlocutorName(c.input)
+		if got != c.expected {
+			t.Errorf("SanitizeInterlocutorName(%q) = %q, expected %q", c.input, got, c.expected)
+		}
+	}
+}
+
+func TestBuildDynamicSystemPromptWithPlaceholderName(t *testing.T) {
+	params := SystemPromptParams{
+		Identity: IdentityParams{
+			Name:     "Chavi Sharma",
+			Username: "Chavi396",
+			Gender:   "female",
+		},
+		Username:  "",
+		FirstName: "User", // Telegram profile with placeholder name "User"
+	}
+
+	p := BuildDynamicSystemPrompt(params)
+
+	if strings.Contains(p, `use their name "User"`) || strings.Contains(p, `use their name "user"`) {
+		t.Errorf("Prompt should NEVER instruct bot to call interlocutor 'User'")
+	}
+	if strings.Contains(p, `You are chatting with "User"`) {
+		t.Errorf("Prompt should not treat 'User' as a real name")
+	}
+	if !strings.Contains(p, `STRICT BAN ON THE WORD "USER"`) {
+		t.Errorf("Prompt must include strict ban on the word USER")
+	}
+	if !strings.Contains(p, `ZERO PLACEHOLDER NAMES`) {
+		t.Errorf("Prompt must include directive 5 banning placeholder names")
+	}
+}
+
 func TestProfanityDetector(t *testing.T) {
 	if !ContainsProfanity("tum ek madarchod ho", nil) {
 		t.Errorf("Expected profanity to be detected")
