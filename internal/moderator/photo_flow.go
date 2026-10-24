@@ -63,6 +63,21 @@ func (h *ConversationHandler) processPhotoRequest(
 		displayUser = fmt.Sprintf("User%d", msg.From.ID)
 	}
 
+	// Real Girl Reciprocity: If user already got a photo from Chavi and hasn't sent their own photo yet, refuse playfully!
+	if h.hasUserPhotoPending(userIDStr) {
+		cancelAction()
+		log.Printf("[PhotoFlow] 🚫 User %s already received a photo. Demanding user's photo before sending again.", userIDStr)
+		cues := []string{
+			"arre maine to bhej di thi na pic haha! pehle tu apni photo bhej na mujhe, tab main doosri bhejungi 😏",
+			"aise thodi na hota hai yrr, har baar main hi photo bhejti rahoon? pehle apni pic dikha mujhe phir main bhejti hoon haha ✨",
+			"tu bas meri photos mangta rehta hai haha, pehle apni ek selfie bhej na dekhun to kaisa dikhta hai tu 😉",
+			"pehle tu apni photo bhej na mujhe, phir main pakka doosri bhejungi haha 🙈 deal?",
+		}
+		cue := cues[rand.Intn(len(cues))]
+		h.sendMessage(ctx, msg, cue)
+		return
+	}
+
 	// Inspect existing outfit from session memory (if updated within last 2 hours)
 	var existingOutfit string
 	if h.relRepo != nil {
@@ -129,6 +144,7 @@ func (h *ConversationHandler) processPhotoRequest(
 	// Step 5: Stop upload ticker & dispatch photo
 	cancelAction()
 	h.sendPhoto(ctx, msg, img.Data, img.URL, caption)
+	h.markPhotoSentToUser(userIDStr)
 	log.Printf("[PhotoFlow] ✅ Successfully delivered photo with caption: %q", caption)
 
 	// If batch was requested and > 1, deliver remaining photos smoothly (up to batchCount)

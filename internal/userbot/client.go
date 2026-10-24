@@ -62,7 +62,7 @@ func NewUserbotManager(cfg *config.Config, botClient *telegramBot.BotClient, onM
 	}
 }
 
-func parseGramJSSession(raw string) (*session.Data, error) {
+func ParseGramJSSession(raw string) (*session.Data, error) {
 	raw = strings.TrimSpace(raw)
 	if !strings.HasPrefix(raw, "1") {
 		return nil, fmt.Errorf("invalid GramJS session format")
@@ -244,7 +244,7 @@ func (ub *UserbotManager) Start(ctx context.Context) error {
 		return nil
 	}
 
-	sessData, err := parseGramJSSession(ub.cfg.TelegramSessionString)
+	sessData, err := ParseGramJSSession(ub.cfg.TelegramSessionString)
 	if err != nil {
 		log.Printf("⚠️ [Userbot] Failed to parse session string: %v", err)
 		return nil
@@ -278,11 +278,9 @@ func (ub *UserbotManager) Start(ctx context.Context) error {
 					title = strings.TrimSpace(u.FirstName + " " + u.LastName)
 				}
 				if inputPeer == nil && chatID > 0 {
-					inputPeer = &tg.InputPeerUserFromMessage{
-						Peer:   &tg.InputPeerSelf{},
-						MsgID:  msg.ID,
-						UserID: chatID,
-					}
+					ub.peerMu.RLock()
+					inputPeer = ub.peerCache[chatID]
+					ub.peerMu.RUnlock()
 				}
 			} else if peerChat, ok := msg.PeerID.(*tg.PeerChat); ok {
 				chatID = peerChat.ChatID
@@ -297,12 +295,6 @@ func (ub *UserbotManager) Start(ctx context.Context) error {
 				if ch, ok := e.Channels[chatID]; ok {
 					title = ch.Title
 					inputPeer = ch.AsInputPeer()
-				} else {
-					inputPeer = &tg.InputPeerChannelFromMessage{
-						Peer:      &tg.InputPeerSelf{},
-						MsgID:     msg.ID,
-						ChannelID: peerChannel.ChannelID,
-					}
 				}
 			}
 
@@ -411,20 +403,16 @@ func (ub *UserbotManager) Start(ctx context.Context) error {
 				title = ch.Title
 				inputPeer = ch.AsInputPeer()
 			} else {
-				inputPeer = &tg.InputPeerChannelFromMessage{
-					Peer:      &tg.InputPeerSelf{},
-					MsgID:     msg.ID,
-					ChannelID: peerChannel.ChannelID,
-				}
+				ub.peerMu.RLock()
+				inputPeer = ub.peerCache[chatID]
+				ub.peerMu.RUnlock()
 			}
 		}
 
 		if inputPeer == nil && chatType == "private" && senderID > 0 {
-			inputPeer = &tg.InputPeerUserFromMessage{
-				Peer:   &tg.InputPeerSelf{},
-				MsgID:  msg.ID,
-				UserID: senderID,
-			}
+			ub.peerMu.RLock()
+			inputPeer = ub.peerCache[senderID]
+			ub.peerMu.RUnlock()
 		}
 
 		if inputPeer != nil {
@@ -549,6 +537,13 @@ func (ub *UserbotManager) Start(ctx context.Context) error {
 				} else {
 					log.Printf("🎉 [Userbot MTProto] Connected and actively listening for messages sent to @%s (%s)!", ub.MyUsername, ub.MyName)
 				}
+
+				// Pre-cache authentic AccessHash for all channels, supergroups, and users on startup
+				go func() {
+					time.Sleep(500 * time.Millisecond)
+					_ = ub.syncDialogs(ctx)
+				}()
+
 				<-ctx.Done()
 
 				ub.senderMu.Lock()
@@ -578,6 +573,79 @@ func (ub *UserbotManager) IsAvailable() bool {
 	return ub.sender != nil
 }
 
+// syncDialogs fetches all dialogs (supergroups, groups, users) and pre-populates the peer cache with genuine AccessHashes.
+func (ub *UserbotManager) syncDialogs(ctx context.Context) error {
+	ub.senderMu.RLock()
+	rawAPI := ub.rawAPI
+	ub.senderMu.RUnlock()
+
+	if rawAPI == nil {
+		return fmt.Errorf("userbot MTProto client is not ready")
+	}
+
+	dialogsRes, err := rawAPI.MessagesGetDialogs(ctx, &tg.MessagesGetDialogsRequest{
+		OffsetPeer: &tg.InputPeerEmpty{},
+		Limit:      100,
+	})
+	if err != nil {
+		log.Printf("⚠️ [Userbot MTProto] Failed to sync dialogs: %v", err)
+		return err
+	}
+
+	var allChats []tg.ChatClass
+	var allUsers []tg.UserClass
+
+	switch d := dialogsRes.(type) {
+	case *tg.MessagesDialogs:
+		allChats = d.Chats
+		allUsers = d.Users
+	case *tg.MessagesDialogsSlice:
+		allChats = d.Chats
+		allUsers = d.Users
+	}
+
+	channelCount := 0
+	chatCount := 0
+	userCount := 0
+
+	ub.peerMu.Lock()
+	for _, c := range allChats {
+		switch ch := c.(type) {
+		case *tg.Channel:
+			p := &tg.InputPeerChannel{
+				ChannelID:  ch.ID,
+				AccessHash: ch.AccessHash,
+			}
+			ub.peerCache[ch.ID] = p
+			ub.peerCache[-1000000000000-ch.ID] = p
+			channelCount++
+		case *tg.Chat:
+			p := &tg.InputPeerChat{
+				ChatID: ch.ID,
+			}
+			ub.peerCache[ch.ID] = p
+			ub.peerCache[-ch.ID] = p
+			chatCount++
+		}
+	}
+
+	for _, u := range allUsers {
+		if user, ok := u.(*tg.User); ok {
+			p := &tg.InputPeerUser{
+				UserID:     user.ID,
+				AccessHash: user.AccessHash,
+			}
+			ub.peerCache[user.ID] = p
+			userCount++
+		}
+	}
+	ub.peerMu.Unlock()
+
+	log.Printf("🎉 [Userbot MTProto] Synced dialogs into peer cache: %d channels/supergroups, %d group chats, %d users",
+		channelCount, chatCount, userCount)
+	return nil
+}
+
 // getInputPeer retrieves or dynamically resolves the InputPeer for a given chat ID.
 func (ub *UserbotManager) getInputPeer(ctx context.Context, chatID int64) (tg.InputPeerClass, error) {
 	if ub.MyUserID != "" {
@@ -594,11 +662,43 @@ func (ub *UserbotManager) getInputPeer(ctx context.Context, chatID int64) (tg.In
 		return peer, nil
 	}
 
+	// Normalize channel ID if negative (Bot API format -100xxx or normal chat -xxx)
 	channelID := chatID
 	if channelID < -1000000000000 {
 		channelID = -1 * (channelID + 1000000000000)
 	} else if channelID < 0 {
 		channelID = -channelID
+	}
+
+	// Check with normalized channelID as well
+	ub.peerMu.RLock()
+	peer, exists = ub.peerCache[channelID]
+	if !exists || peer == nil {
+		botChatID := -1000000000000 - channelID
+		peer, exists = ub.peerCache[botChatID]
+	}
+	ub.peerMu.RUnlock()
+	if exists && peer != nil {
+		return peer, nil
+	}
+
+	// Dynamically sync dialogs if missing
+	log.Printf("[Userbot MTProto] Peer for chat %d not found in cache. Refreshing dialogs...", chatID)
+	_ = ub.syncDialogs(ctx)
+
+	ub.peerMu.RLock()
+	peer, exists = ub.peerCache[chatID]
+	if !exists || peer == nil {
+		peer, exists = ub.peerCache[channelID]
+	}
+	if !exists || peer == nil {
+		botChatID := -1000000000000 - channelID
+		peer, exists = ub.peerCache[botChatID]
+	}
+	ub.peerMu.RUnlock()
+
+	if exists && peer != nil {
+		return peer, nil
 	}
 
 	ub.senderMu.RLock()
@@ -607,25 +707,24 @@ func (ub *UserbotManager) getInputPeer(ctx context.Context, chatID int64) (tg.In
 	ub.senderMu.RUnlock()
 
 	if peersMgr != nil {
-		// 1. Try resolving as channel/supergroup first
 		if p, err := peersMgr.ResolvePeer(ctx, &tg.PeerChannel{ChannelID: channelID}); err == nil && p != nil {
 			inputPeer := p.InputPeer()
 			ub.peerMu.Lock()
 			ub.peerCache[chatID] = inputPeer
+			ub.peerCache[channelID] = inputPeer
 			ub.peerMu.Unlock()
 			return inputPeer, nil
 		}
-		// 2. Try resolving as user
-		if u, err := peersMgr.ResolveUserID(ctx, chatID); err == nil {
-			inputPeer := u.InputPeer()
-			ub.peerMu.Lock()
-			ub.peerCache[chatID] = inputPeer
-			ub.peerMu.Unlock()
-			return inputPeer, nil
-		}
-		// 3. Try resolving as chat
 		if p, err := peersMgr.ResolvePeer(ctx, &tg.PeerChat{ChatID: channelID}); err == nil && p != nil {
 			inputPeer := p.InputPeer()
+			ub.peerMu.Lock()
+			ub.peerCache[chatID] = inputPeer
+			ub.peerCache[channelID] = inputPeer
+			ub.peerMu.Unlock()
+			return inputPeer, nil
+		}
+		if u, err := peersMgr.ResolveUserID(ctx, chatID); err == nil {
+			inputPeer := u.InputPeer()
 			ub.peerMu.Lock()
 			ub.peerCache[chatID] = inputPeer
 			ub.peerMu.Unlock()
@@ -634,37 +733,6 @@ func (ub *UserbotManager) getInputPeer(ctx context.Context, chatID int64) (tg.In
 	}
 
 	if rawAPI != nil {
-		// 4. Try querying ChannelsGetChannels directly if channel ID
-		if channelID > 0 {
-			resCh, err := rawAPI.ChannelsGetChannels(ctx, []tg.InputChannelClass{
-				&tg.InputChannel{ChannelID: channelID, AccessHash: 0},
-			})
-			if err == nil && resCh != nil {
-				for _, chClass := range resCh.GetChats() {
-					switch ch := chClass.(type) {
-					case *tg.Channel:
-						inputPeer := &tg.InputPeerChannel{
-							ChannelID:  ch.ID,
-							AccessHash: ch.AccessHash,
-						}
-						ub.peerMu.Lock()
-						ub.peerCache[chatID] = inputPeer
-						ub.peerMu.Unlock()
-						return inputPeer, nil
-					case *tg.Chat:
-						inputPeer := &tg.InputPeerChat{
-							ChatID: ch.ID,
-						}
-						ub.peerMu.Lock()
-						ub.peerCache[chatID] = inputPeer
-						ub.peerMu.Unlock()
-						return inputPeer, nil
-					}
-				}
-			}
-		}
-
-		// 5. Try querying Telegram UsersGetUsers directly
 		res, err := rawAPI.UsersGetUsers(ctx, []tg.InputUserClass{
 			&tg.InputUser{UserID: chatID, AccessHash: 0},
 		})
@@ -683,11 +751,7 @@ func (ub *UserbotManager) getInputPeer(ctx context.Context, chatID int64) (tg.In
 		}
 	}
 
-	// 6. Fallback based on ID range
-	if chatID > 0 {
-		return &tg.InputPeerUser{UserID: chatID, AccessHash: 0}, nil
-	}
-	return &tg.InputPeerChannel{ChannelID: channelID, AccessHash: 0}, nil
+	return nil, fmt.Errorf("unable to resolve InputPeer for chat %d (missing AccessHash)", chatID)
 }
 
 // SendMessage sends a text message from the real personal account via MTProto.
@@ -701,14 +765,8 @@ func (ub *UserbotManager) SendMessage(ctx context.Context, chatID int64, text st
 	}
 
 	peer, err := ub.getInputPeer(ctx, chatID)
-	if err != nil && replyToID > 0 {
-		peer = &tg.InputPeerUserFromMessage{
-			Peer:   &tg.InputPeerSelf{},
-			MsgID:  replyToID,
-			UserID: chatID,
-		}
-	} else if err != nil {
-		return err
+	if err != nil {
+		return fmt.Errorf("userbot getInputPeer failed for %d: %w", chatID, err)
 	}
 
 	var sendErr error
@@ -718,57 +776,27 @@ func (ub *UserbotManager) SendMessage(ctx context.Context, chatID int64, text st
 		_, sendErr = snd.To(peer).Text(ctx, text)
 	}
 
-	// If replying failed with MSG_ID_INVALID, retry direct text without reply
-	if sendErr != nil && strings.Contains(sendErr.Error(), "MSG_ID_INVALID") {
-		_, sendErr = snd.To(peer).Text(ctx, text)
-	}
-
-	// If sendErr is CHANNEL_INVALID or PEER_ID_INVALID and replyToID > 0, retry with ChannelFromMessage or UserFromMessage
-	if sendErr != nil && (strings.Contains(sendErr.Error(), "CHANNEL_INVALID") || strings.Contains(sendErr.Error(), "PEER_ID_INVALID")) && replyToID > 0 {
-		channelID := chatID
-		if channelID < -1000000000000 {
-			channelID = -1 * (channelID + 1000000000000)
-		} else if channelID < 0 {
-			channelID = -channelID
-		}
-
-		// Try channel from message
-		chPeer := &tg.InputPeerChannelFromMessage{
-			Peer:      &tg.InputPeerSelf{},
-			MsgID:     replyToID,
-			ChannelID: channelID,
-		}
-		_, chErr := snd.To(chPeer).Reply(replyToID).Text(ctx, text)
-		if chErr == nil {
-			ub.peerMu.Lock()
-			ub.peerCache[chatID] = chPeer
-			ub.peerMu.Unlock()
-			return nil
-		}
-
-		// Try user from message
-		fallbackUserPeer := &tg.InputPeerUserFromMessage{
-			Peer:   &tg.InputPeerSelf{},
-			MsgID:  replyToID,
-			UserID: chatID,
-		}
-		_, userErr := snd.To(fallbackUserPeer).Reply(replyToID).Text(ctx, text)
-		if userErr == nil {
-			ub.peerMu.Lock()
-			ub.peerCache[chatID] = fallbackUserPeer
-			ub.peerMu.Unlock()
-			return nil
-		}
-	}
-
-	// Final fallback: try direct text without reply
+	// If replying failed with MSG_ID_INVALID or any message ID error, retry direct text without reply
 	if sendErr != nil && replyToID > 0 {
+		log.Printf("[Userbot MTProto] Reply to msg %d failed in %d (%v). Retrying direct text without reply...", replyToID, chatID, sendErr)
 		_, sendErr = snd.To(peer).Text(ctx, text)
+	}
+
+	// If CHANNEL_INVALID or PEER_ID_INVALID, refresh dialogs and retry send
+	if sendErr != nil && (strings.Contains(sendErr.Error(), "CHANNEL_INVALID") || strings.Contains(sendErr.Error(), "PEER_ID_INVALID")) {
+		log.Printf("[Userbot MTProto] Got %v for chat %d. Refreshing dialogs and retrying send...", sendErr, chatID)
+		_ = ub.syncDialogs(ctx)
+		if refreshedPeer, pErr := ub.getInputPeer(ctx, chatID); pErr == nil {
+			_, sendErr = snd.To(refreshedPeer).Text(ctx, text)
+		}
 	}
 
 	if sendErr != nil {
-		return fmt.Errorf("MTProto SendMessage error: %w", sendErr)
+		log.Printf("❌ [Userbot MTProto] SendMessage to %d failed: %v", chatID, sendErr)
+		return sendErr
 	}
+
+	log.Printf("✅ [Userbot MTProto] SendMessage succeeded in chat %d!", chatID)
 	return nil
 }
 
@@ -785,7 +813,7 @@ func (ub *UserbotManager) SendPhoto(ctx context.Context, chatID int64, photoData
 
 	peer, err := ub.getInputPeer(ctx, chatID)
 	if err != nil {
-		return err
+		return fmt.Errorf("userbot getInputPeer failed for %d: %w", chatID, err)
 	}
 
 	if len(photoData) > 0 && upld != nil {
@@ -800,33 +828,32 @@ func (ub *UserbotManager) SendPhoto(ctx context.Context, chatID int64, photoData
 			photoMedia = message.UploadedPhoto(upload)
 		}
 
+		var sendErr error
 		if replyToID > 0 {
-			_, err = snd.To(peer).Reply(replyToID).Media(ctx, photoMedia)
+			_, sendErr = snd.To(peer).Reply(replyToID).Media(ctx, photoMedia)
 		} else {
-			_, err = snd.To(peer).Media(ctx, photoMedia)
+			_, sendErr = snd.To(peer).Media(ctx, photoMedia)
 		}
 
-		if err != nil && (strings.Contains(err.Error(), "CHANNEL_INVALID") || strings.Contains(err.Error(), "PEER_ID_INVALID")) && replyToID > 0 {
-			channelID := chatID
-			if channelID < -1000000000000 {
-				channelID = -1 * (channelID + 1000000000000)
-			} else if channelID < 0 {
-				channelID = -channelID
-			}
-			chPeer := &tg.InputPeerChannelFromMessage{
-				Peer:      &tg.InputPeerSelf{},
-				MsgID:     replyToID,
-				ChannelID: channelID,
-			}
-			_, chErr := snd.To(chPeer).Reply(replyToID).Media(ctx, photoMedia)
-			if chErr == nil {
-				ub.peerMu.Lock()
-				ub.peerCache[chatID] = chPeer
-				ub.peerMu.Unlock()
-				return nil
+		if sendErr != nil && replyToID > 0 {
+			log.Printf("[Userbot MTProto] Reply to msg %d failed while sending photo (%v). Retrying directly...", replyToID, sendErr)
+			_, sendErr = snd.To(peer).Media(ctx, photoMedia)
+		}
+
+		if sendErr != nil && (strings.Contains(sendErr.Error(), "CHANNEL_INVALID") || strings.Contains(sendErr.Error(), "PEER_ID_INVALID")) {
+			log.Printf("[Userbot MTProto] Got %v while sending photo to %d. Refreshing dialogs...", sendErr, chatID)
+			_ = ub.syncDialogs(ctx)
+			if refreshedPeer, pErr := ub.getInputPeer(ctx, chatID); pErr == nil {
+				_, sendErr = snd.To(refreshedPeer).Media(ctx, photoMedia)
 			}
 		}
-		return err
+
+		if sendErr != nil {
+			log.Printf("❌ [Userbot MTProto] SendPhoto failed: %v", sendErr)
+			return sendErr
+		}
+		log.Printf("✅ [Userbot MTProto] SendPhoto succeeded in chat %d!", chatID)
+		return nil
 	}
 
 	if photoURL != "" {
@@ -834,12 +861,16 @@ func (ub *UserbotManager) SendPhoto(ctx context.Context, chatID int64, photoData
 		if caption != "" {
 			msg = caption + "\n" + photoURL
 		}
+		var sendErr error
 		if replyToID > 0 {
-			_, err := snd.To(peer).Reply(replyToID).Text(ctx, msg)
-			return err
+			_, sendErr = snd.To(peer).Reply(replyToID).Text(ctx, msg)
+		} else {
+			_, sendErr = snd.To(peer).Text(ctx, msg)
 		}
-		_, err := snd.To(peer).Text(ctx, msg)
-		return err
+		if sendErr != nil && replyToID > 0 {
+			_, sendErr = snd.To(peer).Text(ctx, msg)
+		}
+		return sendErr
 	}
 
 	return nil
@@ -858,7 +889,7 @@ func (ub *UserbotManager) SendVoice(ctx context.Context, chatID int64, voiceData
 
 	peer, err := ub.getInputPeer(ctx, chatID)
 	if err != nil {
-		return err
+		return fmt.Errorf("userbot getInputPeer failed for %d: %w", chatID, err)
 	}
 
 	upload, err := upld.FromBytes(ctx, "voice.ogg", voiceData)
@@ -874,27 +905,25 @@ func (ub *UserbotManager) SendVoice(ctx context.Context, chatID int64, voiceData
 		_, sendErr = snd.To(peer).Media(ctx, voiceMedia)
 	}
 
-	if sendErr != nil && (strings.Contains(sendErr.Error(), "CHANNEL_INVALID") || strings.Contains(sendErr.Error(), "PEER_ID_INVALID")) && replyToID > 0 {
-		channelID := chatID
-		if channelID < -1000000000000 {
-			channelID = -1 * (channelID + 1000000000000)
-		} else if channelID < 0 {
-			channelID = -channelID
-		}
-		chPeer := &tg.InputPeerChannelFromMessage{
-			Peer:      &tg.InputPeerSelf{},
-			MsgID:     replyToID,
-			ChannelID: channelID,
-		}
-		_, chErr := snd.To(chPeer).Reply(replyToID).Media(ctx, voiceMedia)
-		if chErr == nil {
-			ub.peerMu.Lock()
-			ub.peerCache[chatID] = chPeer
-			ub.peerMu.Unlock()
-			return nil
+	if sendErr != nil && replyToID > 0 {
+		log.Printf("[Userbot MTProto] Reply to msg %d failed while sending voice (%v). Retrying directly...", replyToID, sendErr)
+		_, sendErr = snd.To(peer).Media(ctx, voiceMedia)
+	}
+
+	if sendErr != nil && (strings.Contains(sendErr.Error(), "CHANNEL_INVALID") || strings.Contains(sendErr.Error(), "PEER_ID_INVALID")) {
+		log.Printf("[Userbot MTProto] Got %v while sending voice to %d. Refreshing dialogs...", sendErr, chatID)
+		_ = ub.syncDialogs(ctx)
+		if refreshedPeer, pErr := ub.getInputPeer(ctx, chatID); pErr == nil {
+			_, sendErr = snd.To(refreshedPeer).Media(ctx, voiceMedia)
 		}
 	}
-	return sendErr
+
+	if sendErr != nil {
+		log.Printf("❌ [Userbot MTProto] SendVoice failed: %v", sendErr)
+		return sendErr
+	}
+	log.Printf("✅ [Userbot MTProto] SendVoice succeeded in chat %d!", chatID)
+	return nil
 }
 
 // SetReaction sets a reaction emoji from the real personal account via MTProto.

@@ -59,11 +59,35 @@ type ConversationHandler struct {
 	batchMu sync.Mutex
 	batches map[string]*messageBatch
 
-	chatLocks       sync.Map // chatID (string) -> *sync.Mutex
-	groupCooldowns  sync.Map // chatID (string) -> time.Time
-	inFlightPhotos  sync.Map // chatID (string) -> bool
-	recentReplies   sync.Map // chatID (string) -> []string
-	recentRepliesMu sync.Mutex
+	chatLocks        sync.Map // chatID (string) -> *sync.Mutex
+	groupCooldowns   sync.Map // chatID (string) -> time.Time
+	inFlightPhotos   sync.Map // chatID (string) -> bool
+	recentReplies    sync.Map // chatID (string) -> []string
+	recentRepliesMu  sync.Mutex
+	userPhotoPending sync.Map // userID (string) -> bool (true if Chavi sent photo, waiting for user photo before sending again)
+}
+
+func (h *ConversationHandler) hasUserPhotoPending(userID string) bool {
+	if val, ok := h.userPhotoPending.Load(userID); ok {
+		return val.(bool)
+	}
+	return false
+}
+
+func (h *ConversationHandler) markPhotoSentToUser(userID string) {
+	h.userPhotoPending.Store(userID, true)
+}
+
+func (h *ConversationHandler) clearUserPhotoPending(userID string) {
+	h.userPhotoPending.Store(userID, false)
+}
+
+func (h *ConversationHandler) getBotAPIChatID(msg *domain.TelegramMessage) int64 {
+	botChatID := msg.Chat.ID
+	if (msg.Chat.Type == "supergroup" || msg.Chat.Type == "channel") && botChatID > 0 {
+		return -1000000000000 - botChatID
+	}
+	return botChatID
 }
 
 func (h *ConversationHandler) getChatLock(chatID int64) *sync.Mutex {
@@ -332,6 +356,12 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 		}
 	}
 
+	// Reciprocity: Clear user photo pending gate when the user sends a photo/selfie
+	if msg.ImageBase64 != "" || len(msg.Photo) > 0 {
+		h.clearUserPhotoPending(userIDStr)
+		log.Printf("[Conversation] 📸 Received photo from user %s. Photo reciprocity gate cleared!", userIDStr)
+	}
+
 	cleanFirstName := prompt.CleanHumanName(msg.From.FirstName, "")
 	cleanLastName := prompt.CleanHumanName(msg.From.LastName, "")
 	cleanUsername := prompt.SanitizeUsername(msg.From.Username)
@@ -524,6 +554,20 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 				"itni jaldi mat macha yrr, abhi li hai pic... bhej rahi hoon bas haha 🙈",
 			}
 			cue := waitingCues[rand.Intn(len(waitingCues))]
+			h.sendMessage(ctx, msg, cue)
+			return
+		}
+
+		// Real Girl Reciprocity: Demand user's photo before sending another one
+		if h.hasUserPhotoPending(userIDStr) {
+			log.Printf("[Conversation] 📸 User %s already received a photo. Demanding user's photo before sending again.", userIDStr)
+			cues := []string{
+				"arre maine to bhej di thi na pic haha! pehle tu apni photo bhej na mujhe, tab main doosri bhejungi 😏",
+				"aise thodi na hota hai yrr, har baar main hi photo bhejti rahoon? pehle apni pic dikha mujhe phir main bhejti hoon haha ✨",
+				"tu bas meri photos mangta rehta hai haha, pehle apni ek selfie bhej na dekhun to kaisa dikhta hai tu 😉",
+				"pehle tu apni photo bhej na mujhe, phir main pakka doosri bhejungi haha 🙈 deal?",
+			}
+			cue := cues[rand.Intn(len(cues))]
 			h.sendMessage(ctx, msg, cue)
 			return
 		}
@@ -1025,6 +1069,20 @@ func (h *ConversationHandler) dispatchChannelOutput(
 	}
 
 	if channel == "photo_only" {
+		userIDStr := fmt.Sprintf("%d", msg.From.ID)
+		if h.hasUserPhotoPending(userIDStr) {
+			log.Printf("[Conversation] 📸 User %s already received a photo. Demanding reciprocity.", userIDStr)
+			cues := []string{
+				"arre maine to bhej di thi na pic haha! pehle tu apni photo bhej na mujhe, tab main doosri bhejungi 😏",
+				"aise thodi na hota hai yrr, har baar main hi photo bhejti rahoon? pehle apni pic dikha mujhe phir main bhejti hoon haha ✨",
+				"tu bas meri photos mangta rehta hai haha, pehle apni ek selfie bhej na dekhun to kaisa dikhta hai tu 😉",
+				"pehle tu apni photo bhej na mujhe, phir main pakka doosri bhejungi haha 🙈 deal?",
+			}
+			cue := cues[rand.Intn(len(cues))]
+			h.sendMessage(ctx, msg, cue)
+			return
+		}
+
 		photoKey := strconv.FormatInt(msg.Chat.ID, 10)
 		if inFlight, ok := h.inFlightPhotos.Load(photoKey); ok && inFlight.(bool) {
 			waitingCues := []string{
@@ -1426,11 +1484,15 @@ func (h *ConversationHandler) sendMessage(ctx context.Context, msg *domain.Teleg
 		if err == nil {
 			return
 		}
+		log.Printf("[Conversation] ⚠️ Userbot SendMessage failed in chat %d (%v). Falling back to BotClient...", msg.Chat.ID, err)
 	}
 
-	_, _ = h.botClient.SendMessage(ctx, msg.Chat.ID, text, telegram.SendMessageOptions{
+	botChatID := h.getBotAPIChatID(msg)
+	if _, err := h.botClient.SendMessage(ctx, botChatID, text, telegram.SendMessageOptions{
 		ReplyToID: msg.MessageID,
-	})
+	}); err != nil {
+		log.Printf("❌ [Conversation] BotClient SendMessage failed in chat %d (%v)", botChatID, err)
+	}
 }
 
 func (h *ConversationHandler) sendPhoto(ctx context.Context, msg *domain.TelegramMessage, photoData []byte, photoURL, caption string) {
@@ -1446,12 +1508,18 @@ func (h *ConversationHandler) sendPhoto(ctx context.Context, msg *domain.Telegra
 		if err == nil {
 			return
 		}
+		log.Printf("[Conversation] ⚠️ Userbot SendPhoto failed in chat %d (%v). Falling back to BotClient...", msg.Chat.ID, err)
 	}
 
+	botChatID := h.getBotAPIChatID(msg)
 	if len(photoData) > 0 {
-		_, _ = h.botClient.SendPhoto(ctx, msg.Chat.ID, photoData, "", caption, msg.MessageID, "HTML")
+		if _, err := h.botClient.SendPhoto(ctx, botChatID, photoData, "", caption, msg.MessageID, "HTML"); err != nil {
+			log.Printf("❌ [Conversation] BotClient SendPhoto failed in chat %d (%v)", botChatID, err)
+		}
 	} else if photoURL != "" {
-		_, _ = h.botClient.SendPhoto(ctx, msg.Chat.ID, nil, photoURL, caption, msg.MessageID, "HTML")
+		if _, err := h.botClient.SendPhoto(ctx, botChatID, nil, photoURL, caption, msg.MessageID, "HTML"); err != nil {
+			log.Printf("❌ [Conversation] BotClient SendPhoto (URL) failed in chat %d (%v)", botChatID, err)
+		}
 	}
 }
 
@@ -1464,9 +1532,13 @@ func (h *ConversationHandler) sendVoice(ctx context.Context, msg *domain.Telegra
 		if err == nil {
 			return
 		}
+		log.Printf("[Conversation] ⚠️ Userbot SendVoice failed in chat %d (%v). Falling back to BotClient...", msg.Chat.ID, err)
 	}
 
-	_, _ = h.botClient.SendVoice(ctx, msg.Chat.ID, voiceData, msg.MessageID)
+	botChatID := h.getBotAPIChatID(msg)
+	if _, err := h.botClient.SendVoice(ctx, botChatID, voiceData, msg.MessageID); err != nil {
+		log.Printf("❌ [Conversation] BotClient SendVoice failed in chat %d (%v)", botChatID, err)
+	}
 }
 
 func (h *ConversationHandler) setReaction(ctx context.Context, msg *domain.TelegramMessage, emoji string) {
