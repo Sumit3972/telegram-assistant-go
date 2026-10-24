@@ -46,6 +46,8 @@ type ConversationHandler struct {
 	adminRepo        domain.AdminRepository
 	warningRepo      domain.WarningRepository
 	modLogRepo       domain.ModerationLogRepository
+	blockedRepo      domain.BlockedUserRepository
+	abuseRepo        domain.AbuseRecordRepository
 	botClient        *telegram.BotClient
 	userbotSender    domain.UserbotSender
 	botName          string
@@ -112,6 +114,8 @@ func NewConversationHandler(
 	adminRepo domain.AdminRepository,
 	warningRepo domain.WarningRepository,
 	modLogRepo domain.ModerationLogRepository,
+	blockedRepo domain.BlockedUserRepository,
+	abuseRepo domain.AbuseRecordRepository,
 	botClient *telegram.BotClient,
 	botName, botUsername, fallbackKey, codivKey string,
 	debounceDuration time.Duration,
@@ -137,6 +141,8 @@ func NewConversationHandler(
 		adminRepo:        adminRepo,
 		warningRepo:      warningRepo,
 		modLogRepo:       modLogRepo,
+		blockedRepo:      blockedRepo,
+		abuseRepo:        abuseRepo,
 		botClient:        botClient,
 		botName:          botName,
 		botUsername:      botUsername,
@@ -317,6 +323,15 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 
 	chatIDStr := fmt.Sprintf("%d", msg.Chat.ID)
 	userIDStr := fmt.Sprintf("%d", msg.From.ID)
+
+	// Early Check: Ignore messages from blocked users
+	if h.blockedRepo != nil {
+		if blocked, _ := h.blockedRepo.IsUserBlocked(ctx, chatIDStr, userIDStr); blocked {
+			log.Printf("[Conversation] 🚫 User %s is permanently blocked in %s. Dropping message.", userIDStr, chatIDStr)
+			return
+		}
+	}
+
 	cleanFirstName := prompt.CleanHumanName(msg.From.FirstName, "")
 	cleanLastName := prompt.CleanHumanName(msg.From.LastName, "")
 	cleanUsername := prompt.SanitizeUsername(msg.From.Username)
@@ -435,6 +450,67 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 			isVoiceReq = true
 			exclusiveChannel = "voice_only"
 			intent = "asking_voice"
+		}
+	}
+
+	// 3b. Dynamic Abuse Evaluation via OpenJev (Zero Hardcoding)
+	isAbuse, _, maxStrikes, abuseReason := EvaluateAbuseFromDecision(pre)
+	if isAbuse {
+		log.Printf("[Conversation] 🚨 Abuse detected via OpenJev: severity=%s, maxStrikes=%d, reason=%s", pre.AbuseSeverity, maxStrikes, abuseReason)
+		// Strict media & location lockdown: No selfies, photos, or voice notes for abusers!
+		isPhotoReq = false
+		isVoiceReq = false
+		exclusiveChannel = "text_only"
+
+		activeStrikes, _ := GetActiveStrikesWithDecay(ctx, h.abuseRepo, chatIDStr, userIDStr)
+		currentStrike := activeStrikes + 1
+		actionTaken := "warned"
+		if currentStrike >= maxStrikes {
+			actionTaken = "blocked"
+		}
+
+		firstName := ""
+		lastName := ""
+		if msg.From != nil {
+			firstName = msg.From.FirstName
+			lastName = msg.From.LastName
+		}
+
+		_ = RecordAbuseStrike(ctx, h.abuseRepo, &domain.AbuseRecord{
+			ChatID:       chatIDStr,
+			UserID:       userIDStr,
+			Username:     displayUser,
+			FirstName:    firstName,
+			LastName:     lastName,
+			MessageText:  text,
+			AbuseType:    pre.AbuseSeverity,
+			StrikeNumber: currentStrike,
+			MaxStrikes:   maxStrikes,
+			ActionTaken:  actionTaken,
+			Evaluator:    "openjev",
+		})
+
+		if currentStrike >= maxStrikes {
+			log.Printf("[Conversation] 🚫 User %s reached strike limit (%d/%d). Blocking permanently on Telegram!", userIDStr, currentStrike, maxStrikes)
+			partingMsg := "chal hadd paar kar di tune... block hai sidha tu 🖕"
+			h.sendMessage(ctx, msg, partingMsg)
+			time.Sleep(500 * time.Millisecond)
+
+			if msg.Chat.Type == "private" {
+				if h.userbotSender != nil && h.userbotSender.IsAvailable() && msg.From != nil {
+					_ = h.userbotSender.BlockUser(ctx, msg.From.ID)
+				}
+			} else {
+				if h.botClient != nil && msg.From != nil {
+					_ = h.botClient.BanChatMember(ctx, msg.Chat.ID, msg.From.ID, 0, false)
+				}
+			}
+
+			_ = RecordBlockedUser(ctx, h.blockedRepo, chatIDStr, userIDStr, displayUser, firstName, lastName, abuseReason, "chavi_ai", currentStrike)
+			if h.modLogRepo != nil {
+				_ = h.modLogRepo.AddLog(ctx, chatIDStr, userIDStr, displayUser, "block_user", abuseReason, 0, "chavi_ai")
+			}
+			return
 		}
 	}
 
@@ -1154,6 +1230,62 @@ func (h *ConversationHandler) executeToolCall(
 		msgText, _ := args["message_text"].(string)
 		adminUname, _ := args["admin_username"].(string)
 		h.forwardToAdmin(ctx, msg, msgText, adminUname)
+
+	case "block_user":
+		reason, _ := args["reason"].(string)
+		partingMessage, _ := args["parting_message"].(string)
+		if partingMessage == "" {
+			partingMessage = "chal hadd me rehna tha... block hai sidha tu 🖕"
+		}
+		if reason == "" {
+			reason = "abusive/harassment behavior"
+		}
+
+		h.sendMessage(ctx, msg, partingMessage)
+		time.Sleep(500 * time.Millisecond)
+
+		if msg.Chat.Type == "private" {
+			if h.userbotSender != nil && h.userbotSender.IsAvailable() && msg.From != nil {
+				if err := h.userbotSender.BlockUser(ctx, msg.From.ID); err != nil {
+					log.Printf("[ToolCall:block_user] Userbot block failed: %v", err)
+				} else {
+					log.Printf("[ToolCall:block_user] User %d blocked via native ContactsBlock!", msg.From.ID)
+				}
+			}
+		} else {
+			if h.botClient != nil && msg.From != nil {
+				_ = h.botClient.BanChatMember(ctx, msg.Chat.ID, msg.From.ID, 0, false)
+			}
+		}
+
+		firstName := ""
+		lastName := ""
+		if msg.From != nil {
+			firstName = msg.From.FirstName
+			lastName = msg.From.LastName
+		}
+
+		if h.blockedRepo != nil {
+			_ = h.blockedRepo.BlockUser(ctx, chatIDStr, userIDStr, username, firstName, lastName, reason, "chavi_ai", 3)
+		}
+		if h.abuseRepo != nil {
+			_ = h.abuseRepo.RecordAbuse(ctx, &domain.AbuseRecord{
+				ChatID:       chatIDStr,
+				UserID:       userIDStr,
+				Username:     username,
+				FirstName:    firstName,
+				LastName:     lastName,
+				MessageText:  msg.Text,
+				AbuseType:    "blocked_by_tool",
+				StrikeNumber: 3,
+				MaxStrikes:   3,
+				ActionTaken:  "blocked",
+				Evaluator:    "llm_tool",
+			})
+		}
+		if h.modLogRepo != nil {
+			_ = h.modLogRepo.AddLog(ctx, chatIDStr, userIDStr, username, "block_user", reason, 0, "chavi_ai")
+		}
 
 	case "mute_user", "ban_user", "unmute_user", "unban_user", "warn_user", "clear_warnings", "purge_messages":
 		if isAdmin {

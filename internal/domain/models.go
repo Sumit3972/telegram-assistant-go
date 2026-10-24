@@ -224,6 +224,35 @@ type ModelPerformance struct {
 	AvgLatencyMs       int    `json:"avg_latency_ms"`
 }
 
+type BlockedUser struct {
+	ID          int64  `json:"id"`
+	ChatID      string `json:"chat_id"`
+	UserID      string `json:"user_id"`
+	Username    string `json:"username"`
+	FirstName   string `json:"first_name"`
+	LastName    string `json:"last_name"`
+	Reason      string `json:"reason"`
+	BlockedBy   string `json:"blocked_by"`
+	StrikeCount int    `json:"strike_count"`
+	CreatedAt   int64  `json:"created_at"`
+}
+
+type AbuseRecord struct {
+	ID           int64  `json:"id"`
+	ChatID       string `json:"chat_id"`
+	UserID       string `json:"user_id"`
+	Username     string `json:"username"`
+	FirstName    string `json:"first_name"`
+	LastName     string `json:"last_name"`
+	MessageText  string `json:"message_text"`
+	AbuseType    string `json:"abuse_type"`
+	StrikeNumber int    `json:"strike_number"`
+	MaxStrikes   int    `json:"max_strikes"`
+	ActionTaken  string `json:"action_taken"`
+	Evaluator    string `json:"evaluator"`
+	CreatedAt    int64  `json:"created_at"`
+}
+
 // --- AI Models ---
 
 type FunctionCall struct {

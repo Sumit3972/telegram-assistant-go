@@ -78,6 +78,27 @@ func GetConversationTools() []domain.ToolDefinition {
 				},
 			},
 		},
+		{
+			Type: "function",
+			Function: domain.ToolFunctionDefinition{
+				Name:        "block_user",
+				Description: "Permanently blocks an abusive, stalking, or repeatedly hostile user on Telegram. Call this when a user crosses the line with physical threats, stalking ('chhod ne aaunga', 'ghar aaunga'), severe hostile slurs, or harassment after being warned. NEVER call this for consensual romance, flirting, or spicy/18+ photo requests.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"reason": map[string]any{
+							"type":        "string",
+							"description": "Brief explanation why user is being blocked (e.g., 'repeated physical threats and stalking after warning').",
+						},
+						"parting_message": map[string]any{
+							"type":        "string",
+							"description": "The final parting roast or dismissal message in Hindi/Hinglish sent immediately before blocking (e.g., 'chal hadd me rehna tha... block hai sidha tu 🖕').",
+						},
+					},
+					"required": []string{"reason", "parting_message"},
+				},
+			},
+		},
 	}
 }
 

@@ -30,6 +30,8 @@ type Moderator struct {
 	shipRepo    domain.ShipRepository
 	apiKeyRepo  domain.ApiKeyRepository
 	perfRepo    domain.PerformanceRepository
+	blockedRepo domain.BlockedUserRepository
+	abuseRepo   domain.AbuseRecordRepository
 
 	botClient     *telegram.BotClient
 	aiClient      *ai.Client
@@ -62,6 +64,8 @@ func NewModerator(
 	shipRepo domain.ShipRepository,
 	apiKeyRepo domain.ApiKeyRepository,
 	perfRepo domain.PerformanceRepository,
+	blockedRepo domain.BlockedUserRepository,
+	abuseRepo domain.AbuseRecordRepository,
 	botClient *telegram.BotClient,
 	aiClient *ai.Client,
 ) *Moderator {
@@ -87,6 +91,8 @@ func NewModerator(
 		shipRepo:      shipRepo,
 		apiKeyRepo:    apiKeyRepo,
 		perfRepo:      perfRepo,
+		blockedRepo:   blockedRepo,
+		abuseRepo:     abuseRepo,
 		botClient:     botClient,
 		aiClient:      aiClient,
 		imageService:  imgService,
@@ -102,6 +108,7 @@ func NewModerator(
 		convHandler: NewConversationHandler(
 			aiClient, imgService, voiceService, searchService, musicService,
 			historyRepo, relRepo, groupRepo, adminRepo, warningRepo, modLogRepo,
+			blockedRepo, abuseRepo,
 			botClient, cfg.MyPersonalName, cfg.MyPersonalUsername, cfg.AIAPIKey, cfg.CodivAPIKey,
 			time.Duration(cfg.DebounceDurationMs)*time.Millisecond,
 		),
@@ -141,6 +148,15 @@ func (m *Moderator) HandleUpdate(ctx context.Context, update *domain.TelegramUpd
 
 	chatIDStr := fmt.Sprintf("%d", msg.Chat.ID)
 	userIDStr := fmt.Sprintf("%d", msg.From.ID)
+
+	// Early Check: Drop updates from blocked users
+	if m.blockedRepo != nil {
+		if blocked, _ := m.blockedRepo.IsUserBlocked(ctx, chatIDStr, userIDStr); blocked {
+			log.Printf("[Moderator] 🚫 Dropping update from blocked user %s in chat %s", userIDStr, chatIDStr)
+			return
+		}
+	}
+
 	text := strings.TrimSpace(msg.Text)
 	if text == "" {
 		text = strings.TrimSpace(msg.Caption)

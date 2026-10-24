@@ -27,6 +27,9 @@ type PreDecisionResult struct {
 	ReactionEmoji    string `json:"reaction_emoji"`
 	AffectionDelta   int    `json:"affection_delta"`
 	UserGender       string `json:"user_gender"`
+	AbuseSeverity    string `json:"abuse_severity"` // "none", "severe_threat", "hostile_abuse", "annoyance"
+	IsAbuse          bool   `json:"is_abuse"`
+	MaxStrikes       int    `json:"max_strikes"`
 }
 
 // CritiqueResult matches Loop 2 from src/openjev_service.py
@@ -253,6 +256,21 @@ func (c *Client) PreDecision(ctx context.Context, userText, historyContext, inte
 				"unknown": "Cannot determine or gender-neutral",
 			},
 		},
+		"abuse_severity": choiceQuestion{
+			Type: "choice",
+			Instructions: "Evaluate if the CURRENT INCOMING USER MESSAGE contains abuse, physical stalking, or threats against Chavi. " +
+				"CRITICAL RULE: Consensual romance, flirting, sexy compliments, dirty desires, asking for 18+ photos, or intimate roleplay is NEVER abuse and MUST be classified as 'none'. " +
+				"Severe physical stalking, uninvited arrival threats ('chhod ne aaunga', 'ghar aaunga', 'room me ghusunga', 'utha lunga'), rape, or violence threats must be classified as 'severe_threat'. " +
+				"Hostile slurs, mother/sister abuses ('bhosdike', 'madarchod', 'fuck you'), or aggressive hatred must be classified as 'hostile_abuse'. " +
+				"Persistent unwanted harassment, badgering, or spam must be classified as 'annoyance'. " +
+				"Friendly chat, college talk, flirting, and sexual compliments are strictly 'none'.",
+			Criteria: map[string]string{
+				"none":          "Normal friendly chat, college talk, flirting, sexual compliments, or spicy/18+ photo requests",
+				"severe_threat": "Physical stalking, non-consensual assault, threats to come to her home/city uninvited, rape, kidnap, or violence",
+				"hostile_abuse": "Aggressive profanity, mother/sister slurs, hostile direct hatred, or abusive attacks",
+				"annoyance":     "Persistent unwanted harassment, badgering, spam, or moderate nuisance",
+			},
+		},
 	}
 
 	answers, err := c.callSystemOne(ctx, state, questions)
@@ -267,6 +285,9 @@ func (c *Client) PreDecision(ctx context.Context, userText, historyContext, inte
 			ReactionEmoji:    "",
 			AffectionDelta:   0,
 			UserGender:       "unknown",
+			AbuseSeverity:    "none",
+			IsAbuse:          false,
+			MaxStrikes:       0,
 		}
 	}
 
@@ -360,8 +381,27 @@ func (c *Client) PreDecision(ctx context.Context, userText, historyContext, inte
 		userGender = "unknown"
 	}
 
-	log.Printf("[OpenJev] 🧠 Loop 1 PreDecision: intent=%s, channel=%s, should_react=%v (emoji=%s), search=%v, delta=%d, gender=%s",
-		intentChoice, channelChoice, shouldReact, reactionEmoji, needsSearch, affectionDelta, userGender)
+	abuseChoice := strings.ToLower(strings.TrimSpace(answers["abuse_severity"].Choice))
+	isAbuse := false
+	maxStrikes := 0
+	switch abuseChoice {
+	case "severe_threat":
+		isAbuse = true
+		maxStrikes = 3
+	case "hostile_abuse":
+		isAbuse = true
+		maxStrikes = 4
+	case "annoyance":
+		isAbuse = true
+		maxStrikes = 5
+	default:
+		abuseChoice = "none"
+		isAbuse = false
+		maxStrikes = 0
+	}
+
+	log.Printf("[OpenJev] 🧠 Loop 1 PreDecision: intent=%s, channel=%s, should_react=%v (emoji=%s), search=%v, delta=%d, gender=%s, abuse=%s (isAbuse=%v, maxStrikes=%d)",
+		intentChoice, channelChoice, shouldReact, reactionEmoji, needsSearch, affectionDelta, userGender, abuseChoice, isAbuse, maxStrikes)
 
 	return PreDecisionResult{
 		ShouldReply:      shouldReply,
@@ -372,6 +412,9 @@ func (c *Client) PreDecision(ctx context.Context, userText, historyContext, inte
 		ReactionEmoji:    reactionEmoji,
 		AffectionDelta:   affectionDelta,
 		UserGender:       userGender,
+		AbuseSeverity:    abuseChoice,
+		IsAbuse:          isAbuse,
+		MaxStrikes:       maxStrikes,
 	}
 }
 

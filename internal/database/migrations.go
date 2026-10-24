@@ -139,6 +139,36 @@ func AutoMigrate(ctx context.Context, pool *pgxpool.Pool) error {
 		`ALTER TABLE relationships ADD COLUMN IF NOT EXISTS first_name TEXT DEFAULT '';`,
 		`ALTER TABLE relationships ADD COLUMN IF NOT EXISTS last_name TEXT DEFAULT '';`,
 		`ALTER TABLE relationships ADD COLUMN IF NOT EXISTS gender TEXT DEFAULT '';`,
+		`CREATE TABLE IF NOT EXISTS blocked_users (
+			id BIGSERIAL PRIMARY KEY,
+			chat_id TEXT NOT NULL,
+			user_id TEXT NOT NULL,
+			username TEXT DEFAULT '',
+			first_name TEXT DEFAULT '',
+			last_name TEXT DEFAULT '',
+			reason TEXT DEFAULT '',
+			blocked_by TEXT DEFAULT 'chavi_ai',
+			strike_count INTEGER DEFAULT 3,
+			created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT,
+			UNIQUE (chat_id, user_id)
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_blocked_users_chat_user ON blocked_users (chat_id, user_id);`,
+		`CREATE TABLE IF NOT EXISTS abuse_records (
+			id BIGSERIAL PRIMARY KEY,
+			chat_id TEXT NOT NULL,
+			user_id TEXT NOT NULL,
+			username TEXT DEFAULT '',
+			first_name TEXT DEFAULT '',
+			last_name TEXT DEFAULT '',
+			message_text TEXT DEFAULT '',
+			abuse_type TEXT NOT NULL,
+			strike_number INTEGER DEFAULT 1,
+			max_strikes INTEGER DEFAULT 3,
+			action_taken TEXT DEFAULT 'warned',
+			evaluator TEXT DEFAULT 'openjev',
+			created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_abuse_records_user ON abuse_records (chat_id, user_id, created_at);`,
 	}
 
 	for _, query := range queries {

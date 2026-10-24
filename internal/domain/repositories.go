@@ -86,11 +86,25 @@ type PerformanceRepository interface {
 	GetModelScores(ctx context.Context) (map[string]float64, error)
 }
 
+type BlockedUserRepository interface {
+	BlockUser(ctx context.Context, chatID, userID, username, firstName, lastName, reason, blockedBy string, strikeCount int) error
+	IsUserBlocked(ctx context.Context, chatID, userID string) (bool, error)
+	UnblockUser(ctx context.Context, chatID, userID string) error
+	GetBlockedUsers(ctx context.Context) ([]BlockedUser, error)
+}
+
+type AbuseRecordRepository interface {
+	RecordAbuse(ctx context.Context, record *AbuseRecord) error
+	GetActiveAbuseStrikes(ctx context.Context, chatID, userID string, windowDuration time.Duration) (int, error)
+	GetAbuseHistory(ctx context.Context, chatID, userID string, limit int) ([]AbuseRecord, error)
+}
+
 type UserbotSender interface {
 	SendMessage(ctx context.Context, chatID int64, text string, replyToID int) error
 	SendPhoto(ctx context.Context, chatID int64, photoData []byte, photoURL, caption string, replyToID int) error
 	SendVoice(ctx context.Context, chatID int64, voiceData []byte, replyToID int) error
 	SetReaction(ctx context.Context, chatID int64, msgID int, emoji string) error
 	SendChatAction(ctx context.Context, chatID int64, action string) error
+	BlockUser(ctx context.Context, userID int64) error
 	IsAvailable() bool
 }

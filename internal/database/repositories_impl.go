@@ -869,3 +869,124 @@ func min(a, b int) int {
 	}
 	return b
 }
+
+// --- Blocked User Repository ---
+
+type blockedUserRepo struct {
+	pool *pgxpool.Pool
+}
+
+func NewBlockedUserRepository(pool *pgxpool.Pool) domain.BlockedUserRepository {
+	return &blockedUserRepo{pool: pool}
+}
+
+func (r *blockedUserRepo) BlockUser(ctx context.Context, chatID, userID, username, firstName, lastName, reason, blockedBy string, strikeCount int) error {
+	_, err := r.pool.Exec(ctx, `
+		INSERT INTO blocked_users (chat_id, user_id, username, first_name, last_name, reason, blocked_by, strike_count, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, EXTRACT(EPOCH FROM NOW())::BIGINT)
+		ON CONFLICT (chat_id, user_id) DO UPDATE SET
+			username = EXCLUDED.username,
+			first_name = EXCLUDED.first_name,
+			last_name = EXCLUDED.last_name,
+			reason = EXCLUDED.reason,
+			blocked_by = EXCLUDED.blocked_by,
+			strike_count = EXCLUDED.strike_count,
+			created_at = EXTRACT(EPOCH FROM NOW())::BIGINT
+	`, chatID, userID, username, firstName, lastName, reason, blockedBy, strikeCount)
+	return err
+}
+
+func (r *blockedUserRepo) IsUserBlocked(ctx context.Context, chatID, userID string) (bool, error) {
+	var exists bool
+	err := r.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM blocked_users WHERE chat_id = $1 AND user_id = $2
+		)
+	`, chatID, userID).Scan(&exists)
+	return exists, err
+}
+
+func (r *blockedUserRepo) UnblockUser(ctx context.Context, chatID, userID string) error {
+	_, err := r.pool.Exec(ctx, `DELETE FROM blocked_users WHERE chat_id = $1 AND user_id = $2`, chatID, userID)
+	return err
+}
+
+func (r *blockedUserRepo) GetBlockedUsers(ctx context.Context) ([]domain.BlockedUser, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, chat_id, user_id, username, first_name, last_name, reason, blocked_by, strike_count, created_at
+		FROM blocked_users
+		ORDER BY created_at DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var list []domain.BlockedUser
+	for rows.Next() {
+		var u domain.BlockedUser
+		if err := rows.Scan(&u.ID, &u.ChatID, &u.UserID, &u.Username, &u.FirstName, &u.LastName, &u.Reason, &u.BlockedBy, &u.StrikeCount, &u.CreatedAt); err == nil {
+			list = append(list, u)
+		}
+	}
+	return list, nil
+}
+
+// --- Abuse Record Repository ---
+
+type abuseRecordRepo struct {
+	pool *pgxpool.Pool
+}
+
+func NewAbuseRecordRepository(pool *pgxpool.Pool) domain.AbuseRecordRepository {
+	return &abuseRecordRepo{pool: pool}
+}
+
+func (r *abuseRecordRepo) RecordAbuse(ctx context.Context, record *domain.AbuseRecord) error {
+	if record == nil {
+		return nil
+	}
+	_, err := r.pool.Exec(ctx, `
+		INSERT INTO abuse_records (chat_id, user_id, username, first_name, last_name, message_text, abuse_type, strike_number, max_strikes, action_taken, evaluator, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, EXTRACT(EPOCH FROM NOW())::BIGINT)
+	`, record.ChatID, record.UserID, record.Username, record.FirstName, record.LastName, record.MessageText, record.AbuseType, record.StrikeNumber, record.MaxStrikes, record.ActionTaken, record.Evaluator)
+	return err
+}
+
+func (r *abuseRecordRepo) GetActiveAbuseStrikes(ctx context.Context, chatID, userID string, windowDuration time.Duration) (int, error) {
+	cutoff := time.Now().Add(-windowDuration).Unix()
+	var count int
+	err := r.pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM abuse_records
+		WHERE chat_id = $1 AND user_id = $2
+		  AND (abuse_type = 'severe_threat' OR created_at >= $3)
+	`, chatID, userID, cutoff).Scan(&count)
+	return count, err
+}
+
+func (r *abuseRecordRepo) GetAbuseHistory(ctx context.Context, chatID, userID string, limit int) ([]domain.AbuseRecord, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, chat_id, user_id, username, first_name, last_name, message_text, abuse_type, strike_number, max_strikes, action_taken, evaluator, created_at
+		FROM abuse_records
+		WHERE chat_id = $1 AND user_id = $2
+		ORDER BY created_at DESC
+		LIMIT $3
+	`, chatID, userID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var list []domain.AbuseRecord
+	for rows.Next() {
+		var rec domain.AbuseRecord
+		if err := rows.Scan(&rec.ID, &rec.ChatID, &rec.UserID, &rec.Username, &rec.FirstName, &rec.LastName, &rec.MessageText, &rec.AbuseType, &rec.StrikeNumber, &rec.MaxStrikes, &rec.ActionTaken, &rec.Evaluator, &rec.CreatedAt); err == nil {
+			list = append(list, rec)
+		}
+	}
+	return list, nil
+}
+

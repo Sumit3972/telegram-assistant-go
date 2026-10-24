@@ -69,6 +69,8 @@ func main() {
 	shipRepo := database.NewShipRepository(dbPool)
 	apiKeyRepo := database.NewApiKeyRepository(dbPool)
 	perfRepo := database.NewPerformanceRepository(dbPool)
+	blockedRepo := database.NewBlockedUserRepository(dbPool)
+	abuseRepo := database.NewAbuseRecordRepository(dbPool)
 
 	// Seed API Keys
 	if err := apiKeyRepo.InitSchemaAndSeed(ctx, defaultAnyApiKeys, cfg.AIAPIKey); err != nil {
@@ -129,6 +131,8 @@ func main() {
 		shipRepo,
 		apiKeyRepo,
 		perfRepo,
+		blockedRepo,
+		abuseRepo,
 		botClient,
 		aiClient,
 	)
