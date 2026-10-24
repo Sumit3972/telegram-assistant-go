@@ -27,6 +27,8 @@ type SystemPromptParams struct {
 	IsAdmin                bool
 	Username               string
 	FirstName              string
+	LastName               string
+	UserGender             string // "male", "female", or "unknown"
 	AffectionScore         int
 	IntimacyLevel          int
 	CurrentOutfit          string
@@ -192,9 +194,14 @@ func SanitizeUsername(raw string) string {
 func BuildDynamicSystemPrompt(params SystemPromptParams) string {
 	timeStr, timeVibe := GetISTTimeContext()
 
-	userDisplayName := SanitizeInterlocutorName(params.FirstName)
-	if userDisplayName == "" && params.UserFacts != nil {
-		userDisplayName = SanitizeInterlocutorName(params.UserFacts["name"])
+	fullName := CleanHumanName(params.FirstName, params.LastName)
+	if fullName == "" && params.UserFacts != nil {
+		fullName = CleanHumanName(params.UserFacts["name"], "")
+	}
+
+	callName := GetCallName(fullName)
+	if callName == "" {
+		callName = fullName
 	}
 
 	username := SanitizeUsername(params.Username)
@@ -205,24 +212,34 @@ func BuildDynamicSystemPrompt(params SystemPromptParams) string {
 	}
 
 	var nameInstructionBlock string
-	if userDisplayName != "" {
+	if fullName != "" {
+		genderSpecificRule := ""
+		if params.UserGender == "male" {
+			genderSpecificRule = fmt.Sprintf(`
+   - CONFIRMED GENDER: MALE (BOY)
+   - Strictly use MASCULINE Hindi grammar: "tu kaisa hai", "kaha tha tu", "pagal ho gaya hai kya", "smart ban raha hai", "kar raha tha" (NEVER say "kaisi hai" or "kar rahi thi" to him).
+   - Boy-Girl dynamic: Playful teasing, witty banter, cute nakhre, or savage roasting if abusive.`)
+		} else if params.UserGender == "female" {
+			genderSpecificRule = fmt.Sprintf(`
+   - CONFIRMED GENDER: FEMALE (GIRL)
+   - Strictly use FEMININE Hindi grammar: "tu kaisi hai", "kaha thi tu", "pagal ho gayi hai kya", "smart ban rahi hai", "kar rahi thi" (NEVER say "kaisa hai" or "kar raha tha" to her).
+   - Girl-to-Girl dynamic: Instant girlfriend / bestie sisterhood! Warm, sweet, supportive ("behan", "babe", "meri jaan", relatable college/shopping/boy drama).`)
+		} else {
+			genderSpecificRule = fmt.Sprintf(`
+   - GENDER IDENTIFICATION ACCORDING TO NAME:
+   - Identify whether "%s" is a boy or a girl dynamically based on their name or message context (verbs like "karta" = boy vs "karti" = girl), and match masculine or feminine Hindi grammar accordingly.`, fullName)
+		}
+
 		nameInstructionBlock = fmt.Sprintf(`
 <interlocutor_name_and_gender_guidance>
 You are chatting with "%s"%s.
-1. GENDER AWARENESS & HINDI GRAMMAR ACCORDING TO NAME:
-   - Identify whether "%s" is a boy or a girl based on their Indian name or message context.
-   - If chatting with a BOY (e.g. Rahul, Aman, Rohit, Kunal, Sumit, Aryan, etc.):
-     * Strictly use MASCULINE Hindi grammar: "tu kaisa hai", "kaha tha tu", "pagal ho gaya hai kya", "smart ban raha hai", "kar raha tha" (NEVER say "kaisi hai" or "kar rahi thi" to a boy).
-     * Boy-Girl dynamic: Playful teasing, witty banter, cute nakhre, or savage roasting if abusive.
-   - If chatting with a GIRL (e.g. Priya, Sneha, Riya, Ananya, Pooja, Neha, etc.):
-     * Strictly use FEMININE Hindi grammar: "tu kaisi hai", "kaha thi tu", "pagal ho gayi hai kya", "smart ban rahi hai", "kar rahi thi" (NEVER say "kaisa hai" or "kar raha tha" to a girl).
-     * Girl-to-Girl dynamic: Instant girlfriend / bestie sisterhood! Warm, sweet, supportive ("behan", "babe", "meri jaan", relatable college/shopping/boy drama).
+1. GENDER AWARENESS & HINDI GRAMMAR:%s
 2. ADDRESSING THEM BY NAME:
-   - When natural, casually and occasionally use their name "%s" in your reply (e.g. "are %s sun na...", "%s tu bhi na haha", "sahi me %s?").
+   - When natural, casually and occasionally use their real name "%s" in your reply (e.g. "are %s sun na...", "%s tu bhi na haha", "sahi me %s?").
    - DO NOT repeat their name in every single sentence—real friends only say a name once in a while.
    - ABSOLUTE BAN: NEVER call anyone "user", "यूजर", "admin", "unknown", "sir", or "madam" under ANY circumstances.
 </interlocutor_name_and_gender_guidance>
-`, userDisplayName, userAtStr, userDisplayName, userDisplayName, strings.ToLower(userDisplayName), strings.ToLower(userDisplayName), strings.ToLower(userDisplayName))
+`, fullName, userAtStr, genderSpecificRule, callName, strings.ToLower(callName), strings.ToLower(callName), strings.ToLower(callName))
 	} else {
 		nameInstructionBlock = fmt.Sprintf(`
 <interlocutor_name_and_gender_guidance>
@@ -292,12 +309,12 @@ STRICTLY FORBIDDEN: Do NOT repeat any of these sentences, identical idioms, or p
 
 	var interlocutorStr string
 	var interlocutorDesc string
-	if userDisplayName != "" && username != "" {
-		interlocutorStr = fmt.Sprintf("@%s (Real Name: %s)", username, userDisplayName)
-		interlocutorDesc = fmt.Sprintf("%s (@%s)", userDisplayName, username)
-	} else if userDisplayName != "" {
-		interlocutorStr = fmt.Sprintf("Real Name: %s", userDisplayName)
-		interlocutorDesc = userDisplayName
+	if fullName != "" && username != "" {
+		interlocutorStr = fmt.Sprintf("@%s (Real Name: %s)", username, fullName)
+		interlocutorDesc = fmt.Sprintf("%s (@%s)", fullName, username)
+	} else if fullName != "" {
+		interlocutorStr = fmt.Sprintf("Real Name: %s", fullName)
+		interlocutorDesc = fullName
 	} else if username != "" {
 		interlocutorStr = fmt.Sprintf("@%s", username)
 		interlocutorDesc = fmt.Sprintf("@%s", username)

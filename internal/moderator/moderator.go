@@ -12,6 +12,7 @@ import (
 	"telegram-ai-assistant/internal/config"
 	"telegram-ai-assistant/internal/domain"
 	"telegram-ai-assistant/internal/media"
+	"telegram-ai-assistant/internal/prompt"
 	"telegram-ai-assistant/internal/telegram"
 )
 
@@ -159,9 +160,9 @@ func (m *Moderator) HandleUpdate(ctx context.Context, update *domain.TelegramUpd
 		recordText = fmt.Sprintf("[Sticker: %s]", msg.Sticker.Emoji)
 	}
 	if recordText != "" && !strings.HasPrefix(recordText, "/") {
-		uName := msg.From.Username
+		uName := prompt.FormatUserDisplayName(msg.From.FirstName, msg.From.LastName, msg.From.Username)
 		if uName == "" {
-			uName = msg.From.FirstName
+			uName = fmt.Sprintf("User%d", msg.From.ID)
 		}
 		_ = m.historyRepo.AddMessage(
 			ctx,

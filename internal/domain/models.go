@@ -186,6 +186,9 @@ type Relationship struct {
 	ChatID          string `json:"chat_id"`
 	UserID          string `json:"user_id"`
 	Username        string `json:"username"`
+	FirstName       string `json:"first_name"`
+	LastName        string `json:"last_name"`
+	Gender          string `json:"gender"`
 	AffectionScore  int    `json:"affection_score"`
 	IntimacyLevel   int    `json:"intimacy_level"`
 	CurrentOutfit   string `json:"current_outfit"`

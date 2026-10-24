@@ -271,12 +271,9 @@ func (h *ConversationHandler) processBatch(batch *messageBatch) {
 		}
 	}
 
-	uName := prompt.SanitizeUsername(mergedMsg.From.Username)
+	uName := prompt.FormatUserDisplayName(mergedMsg.From.FirstName, mergedMsg.From.LastName, mergedMsg.From.Username)
 	if uName == "" {
-		uName = prompt.SanitizeInterlocutorName(mergedMsg.From.FirstName)
-	}
-	if uName == "" {
-		uName = fmt.Sprintf("ID:%d", mergedMsg.From.ID)
+		uName = fmt.Sprintf("User%d", mergedMsg.From.ID)
 	}
 	log.Printf("[Conversation] 📦 Aggregated %d rapid messages from %s into single context:\n%s",
 		len(batch.messages), uName, mergedMsg.Text)
@@ -320,34 +317,47 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 
 	chatIDStr := fmt.Sprintf("%d", msg.Chat.ID)
 	userIDStr := fmt.Sprintf("%d", msg.From.ID)
+	cleanFirstName := prompt.CleanHumanName(msg.From.FirstName, "")
+	cleanLastName := prompt.CleanHumanName(msg.From.LastName, "")
 	cleanUsername := prompt.SanitizeUsername(msg.From.Username)
-	cleanFirstName := prompt.SanitizeInterlocutorName(msg.From.FirstName)
-	if cleanFirstName == "" && msg.From.LastName != "" {
-		cleanFirstName = prompt.SanitizeInterlocutorName(msg.From.LastName)
-	}
 
-	displayUser := cleanUsername
-	if displayUser == "" {
-		displayUser = cleanFirstName
-	}
-	if displayUser == "" {
-		displayUser = fmt.Sprintf("user_%d", msg.From.ID)
-	}
-
-	h.sendChatAction(ctx, msg.Chat.ID, msg.IsUserbot, "typing")
-
-	// 1. Get affection score, intimacy level, and current outfit
+	// 1. Get affection score, intimacy level, and remembered profile from DB
 	affectionScore := 50
 	intimacyLevel := 5
 	currentOutfit := ""
+	savedGender := ""
+	savedFirstName := ""
+	savedLastName := ""
 	if rel, err := h.relRepo.GetRelationship(ctx, chatIDStr, userIDStr); err == nil && rel != nil {
 		affectionScore = rel.AffectionScore
 		intimacyLevel = rel.IntimacyLevel
 		currentOutfit = rel.CurrentOutfit
+		savedGender = rel.Gender
+		savedFirstName = rel.FirstName
+		savedLastName = rel.LastName
 	}
 	if intimacyLevel <= 0 {
 		intimacyLevel = prompt.CalculateIntimacyLevel(affectionScore)
 	}
+
+	if cleanFirstName == "" && savedFirstName != "" {
+		cleanFirstName = savedFirstName
+	}
+	if cleanLastName == "" && savedLastName != "" {
+		cleanLastName = savedLastName
+	}
+
+	displayUser := prompt.FormatUserDisplayName(cleanFirstName, cleanLastName, cleanUsername)
+	if displayUser == "" {
+		displayUser = fmt.Sprintf("User%d", msg.From.ID)
+	}
+
+	userGender := savedGender
+	if textGender := prompt.DetectGenderFromText(text); textGender != "" {
+		userGender = textGender
+	}
+
+	h.sendChatAction(ctx, msg.Chat.ID, msg.IsUserbot, "typing")
 
 	// 2. Get recent history (Take the 6 most recent messages chronologically for background context)
 	recent, _ := h.historyRepo.GetRecentMessages(ctx, chatIDStr, 20)
@@ -361,9 +371,9 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 	}
 	historyContext := strings.Join(historySnippets, "\n")
 
-	// 3. OpenJev Loop 1: Fast System One Pre-Decision (~200ms)
+	// 3. OpenJev Loop 1: Fast System One Pre-Decision (~200ms) with real user name
 	log.Printf("[Conversation] Running OpenJev Loop 1 (System One pre-decision)...")
-	pre := h.decisionClient.PreDecision(ctx, text, historyContext)
+	pre := h.decisionClient.PreDecision(ctx, text, historyContext, displayUser)
 
 	intent := pre.Intent
 	// Chavi always retaliates against abusers with raw street curses; never stays silent!
@@ -376,9 +386,20 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 		return
 	}
 
+	if (userGender == "" || userGender == "unknown") && pre.UserGender != "" && pre.UserGender != "unknown" {
+		userGender = pre.UserGender
+	}
+
+	// Update remembered profile in DB if newly confirmed
+	if (cleanFirstName != "" && cleanFirstName != savedFirstName) ||
+		(cleanLastName != "" && cleanLastName != savedLastName) ||
+		(userGender != "" && userGender != savedGender) {
+		_ = h.relRepo.UpdateProfile(ctx, chatIDStr, userIDStr, cleanFirstName, cleanLastName, userGender)
+	}
+
 	// Update affection and intimacy level
 	if pre.AffectionDelta != 0 {
-		if newScore, err := h.relRepo.UpdateAffection(ctx, chatIDStr, userIDStr, displayUser, pre.AffectionDelta); err == nil {
+		if newScore, err := h.relRepo.UpdateAffection(ctx, chatIDStr, userIDStr, displayUser, cleanFirstName, cleanLastName, userGender, pre.AffectionDelta); err == nil {
 			affectionScore = newScore
 			intimacyLevel = prompt.CalculateIntimacyLevel(newScore)
 		}
@@ -520,10 +541,11 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 				rem := strings.TrimSpace(text[idx+len(marker):])
 				words := strings.Fields(rem)
 				if len(words) > 0 {
-					extracted := prompt.SanitizeInterlocutorName(words[0])
+					extracted := prompt.CleanHumanName(words[0], "")
 					if extracted != "" {
 						cleanFirstName = extracted
 						userFacts["name"] = extracted
+						_ = h.relRepo.UpdateProfile(ctx, chatIDStr, userIDStr, cleanFirstName, cleanLastName, userGender)
 					}
 				}
 				break
@@ -553,6 +575,8 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 			IsAdmin:          isAdmin,
 			Username:         cleanUsername,
 			FirstName:        cleanFirstName,
+			LastName:         cleanLastName,
+			UserGender:       userGender,
 			AffectionScore:   affectionScore,
 			IntimacyLevel:    intimacyLevel,
 			RelationshipTier: relationshipTier,
@@ -598,13 +622,26 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 				content = "Look at this image / meme. Give a short, witty reaction."
 			}
 		}
-		if imageBase64 != "" {
+
+		lowerText := strings.ToLower(text)
+		isSpicyIncomingImage := imageBase64 != "" && (strings.Contains(lowerText, "nude") || strings.Contains(lowerText, "naked") ||
+			strings.Contains(lowerText, "dick") || strings.Contains(lowerText, "boobs") ||
+			strings.Contains(lowerText, "pussy") || strings.Contains(lowerText, "chut") ||
+			strings.Contains(lowerText, "rate") || strings.Contains(lowerText, "lingerie"))
+
+		if imageBase64 != "" && !isSpicyIncomingImage {
 			messages = append(messages, domain.ChatMessage{
 				Role: "user",
 				Content: []domain.ChatMessageContentPart{
 					{Type: "text", Text: content},
 					{Type: "image_url", ImageURL: &domain.ImageURLDetail{URL: imageBase64}},
 				},
+			})
+		} else if isSpicyIncomingImage {
+			log.Printf("[Conversation] 🔒 Spicy incoming image detected. Bypassing Gemini vision payload to protect against safety triggers.")
+			messages = append(messages, domain.ChatMessage{
+				Role:    "user",
+				Content: fmt.Sprintf("[User sent a spicy/intimate image with message: %q. React in-character with Gen-Z teasing banter or street retaliation if creepy/unsolicited].", text),
 			})
 		} else {
 			messages = append(messages, domain.ChatMessage{Role: "user", Content: content})

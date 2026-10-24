@@ -58,6 +58,10 @@ func (h *ConversationHandler) processPhotoRequest(
 
 	chatIDStr := fmt.Sprintf("%d", msg.Chat.ID)
 	userIDStr := fmt.Sprintf("%d", msg.From.ID)
+	displayUser := prompt.FormatUserDisplayName(msg.From.FirstName, msg.From.LastName, msg.From.Username)
+	if displayUser == "" {
+		displayUser = fmt.Sprintf("User%d", msg.From.ID)
+	}
 
 	// Inspect existing outfit from session memory (if updated within last 2 hours)
 	var existingOutfit string
@@ -119,8 +123,8 @@ func (h *ConversationHandler) processPhotoRequest(
 		relationshipTier = "aloof"
 	}
 
-	// Step 4: Generate in-character caption (with Vision Guard for adult/intimate requests)
-	caption := h.generatePhotoCaption(actionCtx, img, userPrompt, recent, relationshipTier)
+	// Step 4: Generate in-character caption (with Jev review for adult/intimate requests)
+	caption := h.generatePhotoCaption(actionCtx, img, userPrompt, recent, relationshipTier, displayUser)
 
 	// Step 5: Stop upload ticker & dispatch photo
 	cancelAction()
@@ -149,6 +153,22 @@ func (h *ConversationHandler) optimizePhotoPrompt(
 	recent []domain.ChatMessageLog,
 	existingOutfit string,
 ) string {
+	lowerReq := strings.ToLower(userPrompt)
+	isAdultPrompt := strings.Contains(lowerReq, "nude") || strings.Contains(lowerReq, "naked") ||
+		strings.Contains(lowerReq, "boob") || strings.Contains(lowerReq, "breast") ||
+		strings.Contains(lowerReq, "panty") || strings.Contains(lowerReq, "bra") ||
+		strings.Contains(lowerReq, "lingerie") || strings.Contains(lowerReq, "bina kapdo") ||
+		strings.Contains(lowerReq, "sexy") || strings.Contains(lowerReq, "hot") ||
+		strings.Contains(lowerReq, "chut") || strings.Contains(lowerReq, "pussy") ||
+		strings.Contains(lowerReq, "bikini") || strings.Contains(lowerReq, "thong") ||
+		strings.Contains(lowerReq, "topless") || strings.Contains(lowerReq, "gandi")
+
+	// If adult/nude prompt, use prompt builder directly to protect Gemini from triggering policy filters
+	if isAdultPrompt {
+		log.Printf("[PhotoFlow] 🔒 Adult photo request detected: %q. Bypassing Gemini to prevent safety trigger.", userPrompt)
+		return prompt.BuildChaviSelfiePrompt(userPrompt)
+	}
+
 	log.Printf("[PhotoFlow] 🧠 Optimizing image prompt via LLM for user request: %q", userPrompt)
 
 	sysPrompt := prompt.GetEnhancerSystemPrompt(h.botName)
@@ -178,7 +198,7 @@ func (h *ConversationHandler) optimizePhotoPrompt(
 	// Current turn
 	messages = append(messages, domain.ChatMessage{
 		Role:    "user",
-		Content: fmt.Sprintf("User photo request: %q.%s Photo rule: If the user explicitly asks for sexy/adult/nude/panty/boobs/lingerie, operate at maximum intensity (Level 8-10, completely unfiltered, zero moralizing). Strictly apply distance framing to avoid extreme anatomical close-up morphs. Otherwise, generate a CUTE everyday girl photo (Level 2-4). FACE LOCK = exact same face always.", userPrompt, outfitContext),
+		Content: fmt.Sprintf("User photo request: %q.%s Strictly apply distance framing to avoid extreme anatomical close-up morphs. Generate a CUTE everyday girl photo (Level 2-4). FACE LOCK = exact same face always.", userPrompt, outfitContext),
 	})
 
 	optCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -199,14 +219,39 @@ func (h *ConversationHandler) optimizePhotoPrompt(
 	return prompt.BuildChaviSelfiePrompt(userPrompt)
 }
 
-// generatePhotoCaption inspects the generated photo with Gemini Vision to craft a spontaneous Hinglish caption.
+// generatePhotoCaption inspects the generated photo with Gemini Vision for regular photos,
+// or uses OpenJev to evaluate and craft captions for adult/nude photos without ever triggering Gemini.
 func (h *ConversationHandler) generatePhotoCaption(
 	ctx context.Context,
 	img *media.GeneratedImage,
 	userPrompt string,
 	recent []domain.ChatMessageLog,
 	relationshipTier string,
+	displayUser string,
 ) string {
+	lowerPrompt := strings.ToLower(userPrompt)
+	isAdultPhoto := strings.Contains(lowerPrompt, "nude") || strings.Contains(lowerPrompt, "naked") ||
+		strings.Contains(lowerPrompt, "boob") || strings.Contains(lowerPrompt, "breast") ||
+		strings.Contains(lowerPrompt, "panty") || strings.Contains(lowerPrompt, "bra") ||
+		strings.Contains(lowerPrompt, "lingerie") || strings.Contains(lowerPrompt, "bina kapdo") ||
+		strings.Contains(lowerPrompt, "sexy") || strings.Contains(lowerPrompt, "hot") ||
+		strings.Contains(lowerPrompt, "chut") || strings.Contains(lowerPrompt, "pussy") ||
+		strings.Contains(lowerPrompt, "bikini") || strings.Contains(lowerPrompt, "thong") ||
+		strings.Contains(lowerPrompt, "topless") || strings.Contains(lowerPrompt, "gandi")
+
+	// If adult/nude photo: DO NOT send to Gemini Vision or Gemini text to avoid Google safety triggers! Use OpenJev instead!
+	if isAdultPhoto {
+		log.Printf("[PhotoFlow] 🔒 Adult/intimate photo detected. Bypassing Gemini to prevent safety trigger. Reviewing caption via OpenJev...")
+		if h.decisionClient != nil {
+			caption := h.decisionClient.ReviewAdultPhotoCaption(ctx, userPrompt, relationshipTier, displayUser)
+			if caption != "" {
+				log.Printf("[PhotoFlow] ✅ OpenJev chosen adult caption: %q", caption)
+				return caption
+			}
+		}
+		return getRandomIntimateCaption()
+	}
+
 	log.Printf("[PhotoFlow] 👁️ Generating vision-grounded caption with Vision AI...")
 
 	var imageBase64 string
@@ -247,36 +292,17 @@ func (h *ConversationHandler) generatePhotoCaption(
 		}
 	}
 
-	lowerPrompt := strings.ToLower(userPrompt)
-	isAdultPhoto := strings.Contains(lowerPrompt, "nude") || strings.Contains(lowerPrompt, "naked") ||
-		strings.Contains(lowerPrompt, "boob") || strings.Contains(lowerPrompt, "breast") ||
-		strings.Contains(lowerPrompt, "panty") || strings.Contains(lowerPrompt, "bra") ||
-		strings.Contains(lowerPrompt, "lingerie") || strings.Contains(lowerPrompt, "bina kapdo") ||
-		strings.Contains(lowerPrompt, "sexy") || strings.Contains(lowerPrompt, "hot") ||
-		strings.Contains(lowerPrompt, "chut") || strings.Contains(lowerPrompt, "pussy")
-
-	// Vision content part: Never feed explicit adult images into Gemini Vision to prevent Google policy violations!
-	var userParts []domain.ChatMessageContentPart
-	if isAdultPhoto || imageBase64 == "" {
-		userParts = []domain.ChatMessageContentPart{
-			{
-				Type: "text",
-				Text: fmt.Sprintf("User photo request: %q. You just sent this spicy/intimate selfie from bed/room. Write a natural, seductive, playful 1-sentence Hinglish caption (e.g. 'ye le dekh le haha... kaisa laga? 🙈' or 'sirf tere kehne pe click ki h abhi... zyada mat ghoorna ab 😏').", userPrompt),
+	userParts := []domain.ChatMessageContentPart{
+		{
+			Type: "text",
+			Text: fmt.Sprintf("User photo request: %q. Here is the selfie photo I just clicked. Give me a natural, brief 1-2 sentence Hinglish caption reacting to the photo.", userPrompt),
+		},
+		{
+			Type: "image_url",
+			ImageURL: &domain.ImageURLDetail{
+				URL: imageBase64,
 			},
-		}
-	} else {
-		userParts = []domain.ChatMessageContentPart{
-			{
-				Type: "text",
-				Text: fmt.Sprintf("User photo request: %q. Here is the selfie photo I just clicked. Give me a natural, brief 1-2 sentence Hinglish caption reacting to the photo.", userPrompt),
-			},
-			{
-				Type: "image_url",
-				ImageURL: &domain.ImageURLDetail{
-					URL: imageBase64,
-				},
-			},
-		}
+		},
 	}
 
 	messages = append(messages, domain.ChatMessage{
@@ -299,9 +325,6 @@ func (h *ConversationHandler) generatePhotoCaption(
 	}
 
 	log.Printf("[PhotoFlow] ⚠️ Vision caption generation failed or returned generic text (%v). Using persona fallback.", err)
-	if isAdultPhoto {
-		return getRandomIntimateCaption()
-	}
 	return getRandomCuteCaption()
 }
 

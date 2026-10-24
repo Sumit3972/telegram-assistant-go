@@ -19,13 +19,14 @@ const (
 
 // PreDecisionResult matches Loop 1 from src/openjev_service.py
 type PreDecisionResult struct {
-	ShouldReply      bool    `json:"should_reply"`
-	Intent           string  `json:"intent"`
-	NeedsWebSearch   bool    `json:"needs_web_search"`
-	ExclusiveChannel string  `json:"exclusive_channel"`
-	ShouldReact      bool    `json:"should_react"`
-	ReactionEmoji    string  `json:"reaction_emoji"`
-	AffectionDelta   int     `json:"affection_delta"`
+	ShouldReply      bool   `json:"should_reply"`
+	Intent           string `json:"intent"`
+	NeedsWebSearch   bool   `json:"needs_web_search"`
+	ExclusiveChannel string `json:"exclusive_channel"`
+	ShouldReact      bool   `json:"should_react"`
+	ReactionEmoji    string `json:"reaction_emoji"`
+	AffectionDelta   int    `json:"affection_delta"`
+	UserGender       string `json:"user_gender"`
 }
 
 // CritiqueResult matches Loop 2 from src/openjev_service.py
@@ -151,7 +152,7 @@ func (c *Client) callSystemOne(ctx context.Context, state string, questions map[
 }
 
 // PreDecision implements Loop 1 from src/openjev_service.py
-func (c *Client) PreDecision(ctx context.Context, userText, historyContext string) PreDecisionResult {
+func (c *Client) PreDecision(ctx context.Context, userText, historyContext, interlocutorName string) PreDecisionResult {
 	loc := time.FixedZone("IST", 5*3600+30*60)
 	now := time.Now().In(loc)
 	currentTimeStr := now.Format("Monday, January 02, 2006 at 03:04 PM IST")
@@ -161,9 +162,14 @@ func (c *Client) PreDecision(ctx context.Context, userText, historyContext strin
 		contextBlock = fmt.Sprintf("\n[Recent Conversation History (Background Context Only)]:\n%s\n", strings.TrimSpace(historyContext))
 	}
 
+	interlocutorInfo := ""
+	if strings.TrimSpace(interlocutorName) != "" {
+		interlocutorInfo = fmt.Sprintf("\nInterlocutor: %s", interlocutorName)
+	}
+
 	state := fmt.Sprintf(
-		"Current Date & Time: %s (Year: %d)\nPersona: Chavi Sharma, 21yo BCA student in Jaipur, Rajasthan, India%s\n>>> CURRENT INCOMING USER MESSAGE TO EVALUATE: %q <<<",
-		currentTimeStr, now.Year(), contextBlock, userText,
+		"Current Date & Time: %s (Year: %d)\nPersona: Chavi Sharma, 21yo BCA student in Jaipur, Rajasthan, India%s%s\n>>> CURRENT INCOMING USER MESSAGE TO EVALUATE: %q <<<",
+		currentTimeStr, now.Year(), interlocutorInfo, contextBlock, userText,
 	)
 
 	questions := map[string]interface{}{
@@ -238,6 +244,15 @@ func (c *Client) PreDecision(ctx context.Context, userText, historyContext strin
 				"Deeply affectionate or romantic (+5)",
 			},
 		},
+		"user_gender": choiceQuestion{
+			Type:         "choice",
+			Instructions: "Determine if the interlocutor is male (boy) or female (girl) based on their real name, Hindi grammar verbs ('karta/raha' = male, 'karti/rahi' = female), or message context. If female choose female, if male choose male, if ambiguous choose unknown.",
+			Criteria: map[string]string{
+				"male":    "Interlocutor is a boy / male",
+				"female":  "Interlocutor is a girl / female",
+				"unknown": "Cannot determine or gender-neutral",
+			},
+		},
 	}
 
 	answers, err := c.callSystemOne(ctx, state, questions)
@@ -251,6 +266,7 @@ func (c *Client) PreDecision(ctx context.Context, userText, historyContext strin
 			ShouldReact:      false,
 			ReactionEmoji:    "",
 			AffectionDelta:   0,
+			UserGender:       "unknown",
 		}
 	}
 
@@ -339,8 +355,13 @@ func (c *Client) PreDecision(ctx context.Context, userText, historyContext strin
 
 	needsSearch := answers["needs_web_search"].Noul > 0.65
 
-	log.Printf("[OpenJev] 🧠 Loop 1 PreDecision: intent=%s, channel=%s, should_react=%v (emoji=%s), search=%v, delta=%d",
-		intentChoice, channelChoice, shouldReact, reactionEmoji, needsSearch, affectionDelta)
+	userGender := strings.ToLower(strings.TrimSpace(answers["user_gender"].Choice))
+	if userGender != "male" && userGender != "female" {
+		userGender = "unknown"
+	}
+
+	log.Printf("[OpenJev] 🧠 Loop 1 PreDecision: intent=%s, channel=%s, should_react=%v (emoji=%s), search=%v, delta=%d, gender=%s",
+		intentChoice, channelChoice, shouldReact, reactionEmoji, needsSearch, affectionDelta, userGender)
 
 	return PreDecisionResult{
 		ShouldReply:      shouldReply,
@@ -350,6 +371,52 @@ func (c *Client) PreDecision(ctx context.Context, userText, historyContext strin
 		ShouldReact:      shouldReact,
 		ReactionEmoji:    reactionEmoji,
 		AffectionDelta:   affectionDelta,
+		UserGender:       userGender,
+	}
+}
+
+// ReviewAdultPhotoCaption uses OpenJev to evaluate and select the best authentic caption for an adult/intimate photo
+// completely bypassing Gemini model so safety filters are never triggered.
+func (c *Client) ReviewAdultPhotoCaption(ctx context.Context, userPrompt, relationshipTier, interlocutorName string) string {
+	state := fmt.Sprintf(
+		"Persona: Chavi Sharma, 21yo BCA student in Jaipur, Rajasthan, India\nInterlocutor: %s (Relationship Tier: %s)\nScenario: Chavi just generated and sent an intimate/spicy photo requested by the user: %q.",
+		interlocutorName, relationshipTier, userPrompt,
+	)
+
+	questions := map[string]interface{}{
+		"caption_style": choiceQuestion{
+			Type:         "choice",
+			Instructions: "Pick the most authentic, natural, teasing Gen-Z Hinglish caption Chavi should attach to this intimate photo for her friend.",
+			Criteria: map[string]string{
+				"seductive_tease": "sirf tere kehne pe click ki h abhi... zyada mat ghoorna ab 😏",
+				"shy_playful":     "ye le dekh le haha... kaisa laga? 🙈",
+				"secret_whisper":  "shh... sirf tere liye hai ye, kisi aur ko dikhana mat 🤫",
+				"bold_banter":     "ab khush? aur kuch dekhna hai kya tujhe haha ✨",
+				"cozy_intimate":   "bina kapdo ke cozy lag raha hai room me... tu bhi bata kaisa laga 😉",
+			},
+		},
+	}
+
+	answers, err := c.callSystemOne(ctx, state, questions)
+	if err != nil {
+		log.Printf("[OpenJev] ⚠️ ReviewAdultPhotoCaption fallback: %v", err)
+		return "sirf tere kehne pe click ki h abhi... zyada mat ghoorna ab 😏"
+	}
+
+	choice := answers["caption_style"].Choice
+	switch choice {
+	case "seductive_tease":
+		return "sirf tere kehne pe click ki h abhi... zyada mat ghoorna ab 😏"
+	case "shy_playful":
+		return "ye le dekh le haha... kaisa laga? 🙈"
+	case "secret_whisper":
+		return "shh... sirf tere liye hai ye, kisi aur ko dikhana mat 🤫"
+	case "bold_banter":
+		return "ab khush? aur kuch dekhna hai kya tujhe haha ✨"
+	case "cozy_intimate":
+		return "bina kapdo ke cozy lag raha hai room me... tu bhi bata kaisa laga 😉"
+	default:
+		return "ye le dekh le haha... kaisa laga? 🙈"
 	}
 }
 
@@ -421,7 +488,7 @@ func (c *Client) CritiqueDraft(ctx context.Context, userText, draftReply, intent
 
 // ClassifyMessage legacy method retained for backwards compatibility
 func (c *Client) ClassifyMessage(ctx context.Context, text string) (Classification, error) {
-	pre := c.PreDecision(ctx, text, "")
+	pre := c.PreDecision(ctx, text, "", "")
 	tier := "normal"
 	if pre.Intent == "rude_abuse" {
 		tier = "abuse"

@@ -136,6 +136,9 @@ func AutoMigrate(ctx context.Context, pool *pgxpool.Pool) error {
 		`ALTER TABLE relationships ADD COLUMN IF NOT EXISTS intimacy_level INTEGER DEFAULT 1;`,
 		`ALTER TABLE relationships ADD COLUMN IF NOT EXISTS current_outfit TEXT DEFAULT '';`,
 		`ALTER TABLE relationships ADD COLUMN IF NOT EXISTS outfit_updated_at BIGINT DEFAULT 0;`,
+		`ALTER TABLE relationships ADD COLUMN IF NOT EXISTS first_name TEXT DEFAULT '';`,
+		`ALTER TABLE relationships ADD COLUMN IF NOT EXISTS last_name TEXT DEFAULT '';`,
+		`ALTER TABLE relationships ADD COLUMN IF NOT EXISTS gender TEXT DEFAULT '';`,
 	}
 
 	for _, query := range queries {
