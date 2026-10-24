@@ -33,10 +33,16 @@ func NormalizeEmotionTags(text string) string {
 		switch {
 		case strings.Contains(raw, "sigh"):
 			chosenTag = "[sigh]"
-		case strings.Contains(raw, "laugh") || strings.Contains(raw, "giggle") || strings.Contains(raw, "chuckle") || strings.Contains(raw, "haha") || strings.Contains(raw, "smile"):
+		case strings.Contains(raw, "giggle"):
+			chosenTag = "[giggles]"
+		case strings.Contains(raw, "playful") || strings.Contains(raw, "teas"):
+			chosenTag = "[playful]"
+		case strings.Contains(raw, "laugh") || strings.Contains(raw, "chuckle") || strings.Contains(raw, "haha") || strings.Contains(raw, "smile"):
 			chosenTag = "[laughing]"
 		case strings.Contains(raw, "whisper") || strings.Contains(raw, "hush") || strings.Contains(raw, "secret") || strings.Contains(raw, "soft") || strings.Contains(raw, "sensual") || strings.Contains(raw, "intimate"):
 			chosenTag = "[whispering]"
+		case strings.Contains(raw, "breathless") || strings.Contains(raw, "heavy breath"):
+			chosenTag = "[breathless]"
 		case strings.Contains(raw, "pant") || strings.Contains(raw, "moan") || strings.Contains(raw, "gasp") || strings.Contains(raw, "breath"):
 			chosenTag = "[gasp]"
 		case strings.Contains(raw, "annoy") || strings.Contains(raw, "irritat") || strings.Contains(raw, "frustrat"):

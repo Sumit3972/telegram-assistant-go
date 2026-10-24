@@ -154,7 +154,11 @@ func (m *Moderator) HandleUpdate(ctx context.Context, update *domain.TelegramUpd
 	}
 
 	// 3. Cache incoming message in history (for both private and group chats)
-	if text != "" && !strings.HasPrefix(text, "/") {
+	recordText := text
+	if recordText == "" && msg.Sticker != nil {
+		recordText = fmt.Sprintf("[Sticker: %s]", msg.Sticker.Emoji)
+	}
+	if recordText != "" && !strings.HasPrefix(recordText, "/") {
 		uName := msg.From.Username
 		if uName == "" {
 			uName = msg.From.FirstName
@@ -164,7 +168,7 @@ func (m *Moderator) HandleUpdate(ctx context.Context, update *domain.TelegramUpd
 			chatIDStr,
 			userIDStr,
 			uName,
-			text,
+			recordText,
 			strconv.Itoa(msg.MessageID),
 			"",
 		)
@@ -247,9 +251,32 @@ func (m *Moderator) HandleUpdate(ctx context.Context, update *domain.TelegramUpd
 }
 
 func (m *Moderator) isTalkingToBot(msg *domain.TelegramMessage, text string) bool {
+	// 0. Strict filter: Ignore all bots and automated services
+	if msg.From != nil {
+		uLower := strings.ToLower(msg.From.Username)
+		if msg.From.IsBot || strings.HasSuffix(uLower, "bot") || uLower == "missrose_bot" {
+			return false
+		}
+	}
+
+	trimmed := strings.TrimSpace(text)
+
+	// 0b. In groups, ignore admin and bot commands (!warn, !mute, !ban, #notes, /commands)
+	if strings.HasPrefix(trimmed, "!") || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "/") {
+		return false
+	}
+
+	// 0c. Ignore moderation notification strings
+	tLower := strings.ToLower(trimmed)
+	if strings.Contains(tLower, "banned chavi") || strings.Contains(tLower, "muted chavi") ||
+		strings.Contains(tLower, "kicked chavi") || strings.Contains(tLower, "warned chavi") ||
+		strings.Contains(tLower, "another one bites the dust") {
+		return false
+	}
+
 	// In groups, ignore empty messages with no text and no photos/media to prevent meaningless AI triggers
-	hasMedia := msg.ImageBase64 != "" || len(msg.Photo) > 0
-	if strings.TrimSpace(text) == "" && !hasMedia {
+	hasMedia := msg.ImageBase64 != "" || len(msg.Photo) > 0 || msg.Sticker != nil
+	if trimmed == "" && !hasMedia {
 		return false
 	}
 

@@ -571,19 +571,47 @@ func NewRelationshipRepository(pool *pgxpool.Pool) domain.RelationshipRepository
 	return &relationshipRepo{pool: pool}
 }
 
+func calculateIntimacyLevel(score int) int {
+	switch {
+	case score <= 15:
+		return 1
+	case score <= 25:
+		return 2
+	case score <= 35:
+		return 3
+	case score <= 45:
+		return 4
+	case score <= 55:
+		return 5
+	case score <= 65:
+		return 6
+	case score <= 75:
+		return 7
+	case score <= 85:
+		return 8
+	case score <= 93:
+		return 9
+	default:
+		return 10
+	}
+}
+
 func (r *relationshipRepo) GetRelationship(ctx context.Context, chatID, userID string) (*domain.Relationship, error) {
 	row := r.pool.QueryRow(ctx, `
-		SELECT chat_id, user_id, username, affection_score, last_interaction
+		SELECT chat_id, user_id, username, affection_score, COALESCE(intimacy_level, 1), COALESCE(current_outfit, ''), COALESCE(outfit_updated_at, 0), last_interaction
 		FROM relationships WHERE chat_id = $1 AND user_id = $2
 	`, chatID, userID)
 
 	var rel domain.Relationship
-	err := row.Scan(&rel.ChatID, &rel.UserID, &rel.Username, &rel.AffectionScore, &rel.LastInteraction)
+	err := row.Scan(&rel.ChatID, &rel.UserID, &rel.Username, &rel.AffectionScore, &rel.IntimacyLevel, &rel.CurrentOutfit, &rel.OutfitUpdatedAt, &rel.LastInteraction)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, err
+	}
+	if rel.IntimacyLevel <= 0 {
+		rel.IntimacyLevel = calculateIntimacyLevel(rel.AffectionScore)
 	}
 	return &rel, nil
 }
@@ -601,18 +629,30 @@ func (r *relationshipRepo) UpdateAffection(ctx context.Context, chatID, userID, 
 	} else if newScore > 100 {
 		newScore = 100
 	}
+	intimacyLevel := calculateIntimacyLevel(newScore)
 
 	now := time.Now().Unix()
 	_, err = r.pool.Exec(ctx, `
-		INSERT INTO relationships (chat_id, user_id, username, affection_score, last_interaction)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO relationships (chat_id, user_id, username, affection_score, intimacy_level, last_interaction)
+		VALUES ($1, $2, $3, $4, $5, $6)
 		ON CONFLICT (chat_id, user_id) DO UPDATE SET
 			affection_score = EXCLUDED.affection_score,
+			intimacy_level = EXCLUDED.intimacy_level,
 			username = EXCLUDED.username,
 			last_interaction = EXCLUDED.last_interaction
-	`, chatID, userID, username, newScore, now)
+	`, chatID, userID, username, newScore, intimacyLevel, now)
 
 	return newScore, err
+}
+
+func (r *relationshipRepo) UpdateOutfit(ctx context.Context, chatID, userID, outfit string) error {
+	now := time.Now().Unix()
+	_, err := r.pool.Exec(ctx, `
+		UPDATE relationships
+		SET current_outfit = $3, outfit_updated_at = $4, last_interaction = $4
+		WHERE chat_id = $1 AND user_id = $2
+	`, chatID, userID, outfit, now)
+	return err
 }
 
 // --- Daily Ship Repository ---

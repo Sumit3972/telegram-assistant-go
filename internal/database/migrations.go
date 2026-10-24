@@ -133,6 +133,9 @@ func AutoMigrate(ctx context.Context, pool *pgxpool.Pool) error {
 			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
 			UNIQUE(provider, api_key)
 		);`,
+		`ALTER TABLE relationships ADD COLUMN IF NOT EXISTS intimacy_level INTEGER DEFAULT 1;`,
+		`ALTER TABLE relationships ADD COLUMN IF NOT EXISTS current_outfit TEXT DEFAULT '';`,
+		`ALTER TABLE relationships ADD COLUMN IF NOT EXISTS outfit_updated_at BIGINT DEFAULT 0;`,
 	}
 
 	for _, query := range queries {

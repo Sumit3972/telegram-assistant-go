@@ -64,6 +64,7 @@ type MentionRepository interface {
 type RelationshipRepository interface {
 	GetRelationship(ctx context.Context, chatID, userID string) (*Relationship, error)
 	UpdateAffection(ctx context.Context, chatID, userID, username string, delta int) (int, error)
+	UpdateOutfit(ctx context.Context, chatID, userID, outfit string) error
 }
 
 type ShipRepository interface {

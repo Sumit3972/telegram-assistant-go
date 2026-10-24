@@ -332,7 +332,12 @@ func isSafetyBlockedError(statusCode int, bodyStr string) bool {
 		strings.Contains(s, "HARM_CATEGORY") ||
 		strings.Contains(s, "BLOCKLIST") ||
 		strings.Contains(s, "RECITATION") ||
-		strings.Contains(s, "PROMPT_BLOCKED")
+		strings.Contains(s, "PROMPT_BLOCKED") ||
+		strings.Contains(s, "SENSITIVE WORDS") ||
+		strings.Contains(s, "VIOLATE") ||
+		strings.Contains(s, "POLICIES.GOOGLE.COM") ||
+		strings.Contains(s, "USE-POLICY") ||
+		strings.Contains(s, "AI.GOOGLE.DEV")
 }
 
 // FetchQuotaFor contacts Google Cloud Code API to inspect live quota fractions.
@@ -767,6 +772,13 @@ func (c *Client) Complete(
 					"generationConfig": map[string]any{
 						"temperature":     0.85,
 						"maxOutputTokens": 2048,
+					},
+					"safetySettings": []map[string]string{
+						{"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+						{"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+						{"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+						{"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+						{"category": "HARM_CATEGORY_CIVIC_INTEGRITY", "threshold": "BLOCK_NONE"},
 					},
 				},
 			}

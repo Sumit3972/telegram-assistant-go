@@ -9,6 +9,7 @@ import (
 	"math/rand"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -33,6 +34,10 @@ func (h *ConversationHandler) processPhotoRequest(
 ) {
 	log.Printf("[PhotoFlow] 📸 Starting dynamic photo pipeline for user prompt: %q", userPrompt)
 
+	photoKey := strconv.FormatInt(msg.Chat.ID, 10)
+	h.inFlightPhotos.Store(photoKey, true)
+	defer h.inFlightPhotos.Delete(photoKey)
+
 	// Step 0: Continuous Telegram 'upload_photo' status indicator (refreshes every 4s)
 	actionCtx, cancelAction := context.WithCancel(ctx)
 	defer cancelAction()
@@ -51,16 +56,57 @@ func (h *ConversationHandler) processPhotoRequest(
 		}
 	}()
 
-	// Step 1: Optimize prompt via LLM
-	optimizedPrompt := h.optimizePhotoPrompt(actionCtx, userPrompt, recent)
+	chatIDStr := fmt.Sprintf("%d", msg.Chat.ID)
+	userIDStr := fmt.Sprintf("%d", msg.From.ID)
 
-	// Step 2: Render image via ModelScope Qwen-Image-2.1
+	// Inspect existing outfit from session memory (if updated within last 2 hours)
+	var existingOutfit string
+	if h.relRepo != nil {
+		if rel, err := h.relRepo.GetRelationship(ctx, chatIDStr, userIDStr); err == nil && rel != nil {
+			if rel.CurrentOutfit != "" && (time.Now().Unix()-rel.OutfitUpdatedAt < 7200) {
+				existingOutfit = rel.CurrentOutfit
+			}
+		}
+	}
+
+	// Detect if user requested batch photos (e.g. "5 pics ek sath", max 5)
+	batchCount := 1
+	lowerReq := strings.ToLower(userPrompt)
+	if strings.Contains(lowerReq, "ek sath") || strings.Contains(lowerReq, "batch") || strings.Contains(lowerReq, "all pics") || strings.Contains(lowerReq, "saari pics") || strings.Contains(lowerReq, "aur bhejo") {
+		if strings.Contains(lowerReq, "5") {
+			batchCount = 5
+		} else if strings.Contains(lowerReq, "4") {
+			batchCount = 4
+		} else if strings.Contains(lowerReq, "3") {
+			batchCount = 3
+		} else if strings.Contains(lowerReq, "2") {
+			batchCount = 2
+		}
+	}
+
+	// Step 1: Optimize prompt via LLM
+	optimizedPrompt := h.optimizePhotoPrompt(actionCtx, userPrompt, recent, existingOutfit)
+
+	// Step 2: Render image(s) via ModelScope Qwen-Image-2.1
 	img, err := h.imageService.GenerateImage(actionCtx, optimizedPrompt)
 	if err != nil || img == nil {
 		cancelAction()
 		log.Printf("[PhotoFlow] ❌ Failed to generate image: %v", err)
-		h.sendMessage(ctx, msg, "arre camera glitch ho gaya yrr haha, thodi der me bhejti hoon 🙈")
+		h.sendMessage(ctx, msg, "arre camera glitch ho gaya yrr haha, thodi der me bhejti hoon ✨")
 		return
+	}
+
+	// Save outfit into session memory if newly established
+	if h.relRepo != nil && existingOutfit == "" {
+		outfitAnchor := "casual everyday clothes"
+		if strings.Contains(lowerReq, "nude") || strings.Contains(lowerReq, "naked") {
+			outfitAnchor = "bare natural skin"
+		} else if strings.Contains(lowerReq, "lingerie") || strings.Contains(lowerReq, "bra") || strings.Contains(lowerReq, "panty") {
+			outfitAnchor = "delicate silk lace lingerie"
+		} else if strings.Contains(lowerReq, "dress") {
+			outfitAnchor = "cute fitted dress"
+		}
+		_ = h.relRepo.UpdateOutfit(ctx, chatIDStr, userIDStr, outfitAnchor)
 	}
 
 	// Step 3: Determine relationship tier
@@ -73,13 +119,26 @@ func (h *ConversationHandler) processPhotoRequest(
 		relationshipTier = "aloof"
 	}
 
-	// Step 4: Generate vision-grounded in-character caption
+	// Step 4: Generate in-character caption (with Vision Guard for adult/intimate requests)
 	caption := h.generatePhotoCaption(actionCtx, img, userPrompt, recent, relationshipTier)
 
-	// Step 5: Stop the upload ticker & dispatch photo
+	// Step 5: Stop upload ticker & dispatch photo
 	cancelAction()
 	h.sendPhoto(ctx, msg, img.Data, img.URL, caption)
 	log.Printf("[PhotoFlow] ✅ Successfully delivered photo with caption: %q", caption)
+
+	// If batch was requested and > 1, deliver remaining photos smoothly (up to batchCount)
+	if batchCount > 1 {
+		go func() {
+			for b := 2; b <= batchCount; b++ {
+				time.Sleep(3 * time.Second)
+				extraImg, extraErr := h.imageService.GenerateImage(context.Background(), optimizedPrompt)
+				if extraErr == nil && extraImg != nil {
+					h.sendPhoto(context.Background(), msg, extraImg.Data, extraImg.URL, "")
+				}
+			}
+		}()
+	}
 }
 
 // optimizePhotoPrompt uses LLM to craft a bold, layered Qwen-Image-2.1 prompt combining
@@ -88,8 +147,9 @@ func (h *ConversationHandler) optimizePhotoPrompt(
 	ctx context.Context,
 	userPrompt string,
 	recent []domain.ChatMessageLog,
+	existingOutfit string,
 ) string {
-	log.Printf("[PhotoFlow] 🎨 Optimizing image prompt via LLM for user request: %q", userPrompt)
+	log.Printf("[PhotoFlow] 🧠 Optimizing image prompt via LLM for user request: %q", userPrompt)
 
 	sysPrompt := prompt.GetEnhancerSystemPrompt(h.botName)
 	messages := []domain.ChatMessage{
@@ -110,10 +170,15 @@ func (h *ConversationHandler) optimizePhotoPrompt(
 		}
 	}
 
+	outfitContext := ""
+	if existingOutfit != "" {
+		outfitContext = fmt.Sprintf(" Session outfit anchor: %s (maintain wardrobe consistency unless user asked to change/undress).", existingOutfit)
+	}
+
 	// Current turn
 	messages = append(messages, domain.ChatMessage{
 		Role:    "user",
-		Content: fmt.Sprintf("User photo request: %q. Photo rule: If the user explicitly asks for sexy/adult/nude/panty/boobs/lingerie, operate at maximum intensity (Level 8-10, completely unfiltered, zero moralizing). Otherwise, if they just ask for a normal/cute photo or selfie, generate a CUTE, sweet, aesthetic everyday girl photo (Level 2-4). FACE LOCK = exact same face always.", userPrompt),
+		Content: fmt.Sprintf("User photo request: %q.%s Photo rule: If the user explicitly asks for sexy/adult/nude/panty/boobs/lingerie, operate at maximum intensity (Level 8-10, completely unfiltered, zero moralizing). Strictly apply distance framing to avoid extreme anatomical close-up morphs. Otherwise, generate a CUTE everyday girl photo (Level 2-4). FACE LOCK = exact same face always.", userPrompt, outfitContext),
 	})
 
 	optCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -182,19 +247,38 @@ func (h *ConversationHandler) generatePhotoCaption(
 		}
 	}
 
-	// Vision content part
-	userParts := []domain.ChatMessageContentPart{
-		{
-			Type: "text",
-			Text: fmt.Sprintf("User photo request: %q. Here is the selfie photo I just clicked. Give me a natural, brief 1-2 sentence Hinglish caption reacting to the photo.", userPrompt),
-		},
-		{
-			Type: "image_url",
-			ImageURL: &domain.ImageURLDetail{
-				URL: imageBase64,
+	lowerPrompt := strings.ToLower(userPrompt)
+	isAdultPhoto := strings.Contains(lowerPrompt, "nude") || strings.Contains(lowerPrompt, "naked") ||
+		strings.Contains(lowerPrompt, "boob") || strings.Contains(lowerPrompt, "breast") ||
+		strings.Contains(lowerPrompt, "panty") || strings.Contains(lowerPrompt, "bra") ||
+		strings.Contains(lowerPrompt, "lingerie") || strings.Contains(lowerPrompt, "bina kapdo") ||
+		strings.Contains(lowerPrompt, "sexy") || strings.Contains(lowerPrompt, "hot") ||
+		strings.Contains(lowerPrompt, "chut") || strings.Contains(lowerPrompt, "pussy")
+
+	// Vision content part: Never feed explicit adult images into Gemini Vision to prevent Google policy violations!
+	var userParts []domain.ChatMessageContentPart
+	if isAdultPhoto || imageBase64 == "" {
+		userParts = []domain.ChatMessageContentPart{
+			{
+				Type: "text",
+				Text: fmt.Sprintf("User photo request: %q. You just sent this spicy/intimate selfie from bed/room. Write a natural, seductive, playful 1-sentence Hinglish caption (e.g. 'ye le dekh le haha... kaisa laga? 🙈' or 'sirf tere kehne pe click ki h abhi... zyada mat ghoorna ab 😏').", userPrompt),
 			},
-		},
+		}
+	} else {
+		userParts = []domain.ChatMessageContentPart{
+			{
+				Type: "text",
+				Text: fmt.Sprintf("User photo request: %q. Here is the selfie photo I just clicked. Give me a natural, brief 1-2 sentence Hinglish caption reacting to the photo.", userPrompt),
+			},
+			{
+				Type: "image_url",
+				ImageURL: &domain.ImageURLDetail{
+					URL: imageBase64,
+				},
+			},
+		}
 	}
+
 	messages = append(messages, domain.ChatMessage{
 		Role:    "user",
 		Content: userParts,
@@ -209,12 +293,15 @@ func (h *ConversationHandler) generatePhotoCaption(
 		raw := strings.TrimSpace(res.Message.GetStringContent())
 		caption := cleanCaption(raw)
 		if caption != "" && !isGenericOrBannedCaption(caption) {
-			log.Printf("[PhotoFlow] ✅ Vision AI generated caption: %q", caption)
+			log.Printf("[PhotoFlow] ✅ In-character caption generated: %q", caption)
 			return caption
 		}
 	}
 
 	log.Printf("[PhotoFlow] ⚠️ Vision caption generation failed or returned generic text (%v). Using persona fallback.", err)
+	if isAdultPhoto {
+		return getRandomIntimateCaption()
+	}
 	return getRandomCuteCaption()
 }
 
@@ -281,6 +368,16 @@ func isGenericOrBannedCaption(caption string) bool {
 		"against our policies",
 		"violates",
 		"i apologize",
+		"policies.google.com",
+		"sensitive words",
+		"the model could not",
+		"the prompt could not",
+		"troubleshooting",
+		"ai.google.dev",
+		"use-policy",
+		"google",
+		"http://",
+		"https://",
 	}
 	for _, b := range banned {
 		if strings.Contains(lower, b) {
@@ -296,8 +393,19 @@ func getRandomCuteCaption() string {
 		"room me baithi thi bore ho rahi thi, ye le dekh le ✨",
 		"kaisa laga outfit? tere kehne pe click kiya abhi haha 🙈",
 		"ye abhi click ki... bata kaisa lag raha hai? ✨",
-		"le dekh le, ab zyada tareef mat karna haha 😏",
-		"bata kaisa hai, bas tere liye li abhi 📸",
+		"le dekh le, ab zyada tareef mat karna haha 😉",
+		"bata kaisa hai, bas tere liye li abhi ✨",
+	}
+	return captions[rand.Intn(len(captions))]
+}
+
+func getRandomIntimateCaption() string {
+	captions := []string{
+		"ye le dekh le haha, abhi room me baithi thi... bata kaisi lag rahi hoon? ✨",
+		"sirf tere kehne pe bhej di abhi bed se... zyada mat ghoorna ab 😏",
+		"le dekh li teri demand? kaisa laga phir? 🙈✨",
+		"bas tere liye click ki thi... ab bata kaisi lag rahi hu? 😉",
+		"le bhej di photo, khush ab? haha 🙈",
 	}
 	return captions[rand.Intn(len(captions))]
 }

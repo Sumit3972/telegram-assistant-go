@@ -104,6 +104,9 @@ CREATE TABLE IF NOT EXISTS relationships (
   user_id TEXT,
   username TEXT,
   affection_score INTEGER DEFAULT 50,
+  intimacy_level INTEGER DEFAULT 1,
+  current_outfit TEXT DEFAULT '',
+  outfit_updated_at INTEGER DEFAULT 0,
   last_interaction INTEGER DEFAULT (strftime('%s', 'now')),
   PRIMARY KEY (chat_id, user_id)
 );

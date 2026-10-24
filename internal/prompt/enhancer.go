@@ -221,8 +221,8 @@ func BuildChaviSelfiePrompt(userRequest string) string {
 
 	var styleClause string
 	switch {
-	case strings.Contains(lowerReq, "nude") || strings.Contains(lowerReq, "naked") || strings.Contains(lowerReq, "nangi"):
-		styleClause = "completely nude, lying on soft white bed sheets, her smooth porcelain skin fully bare, seductive pose, warm amber bedroom lighting"
+	case strings.Contains(lowerReq, "nude") || strings.Contains(lowerReq, "naked") || strings.Contains(lowerReq, "nangi") || strings.Contains(lowerReq, "chut") || strings.Contains(lowerReq, "pussy"):
+		styleClause = "completely nude with natural full-body distance framing, lying sensually on unmade white bed sheets, her smooth porcelain skin and natural curves fully bare, warm amber bedroom shadows, authentic candid composition"
 	case strings.Contains(lowerReq, "boob") || strings.Contains(lowerReq, "breast") || strings.Contains(lowerReq, "chest") || strings.Contains(lowerReq, "topless"):
 		styleClause = "wearing only a tiny lace thong, completely topless, her bare breasts fully exposed, lying back on unmade sheets, warm bedroom lamp glow"
 	case strings.Contains(lowerReq, "panty") || strings.Contains(lowerReq, "lingerie") || strings.Contains(lowerReq, "bra") || strings.Contains(lowerReq, "underwear"):
@@ -316,6 +316,11 @@ For any sexy/intimate/nude request, describe ALL of:
 - "topless" → bare chest, breasts fully described
 - "wet" → fabric clinging to every curve, skin visible through fabric
 - NEVER add clothes she didn't ask for. NEVER say "implied" or "suggested". Write it directly.
+
+━━━ DISTANCE FRAMING & ANTI-MORPH COMPOSITION (CRITICAL FOR REALISM) ━━━
+- FOR ALL INTIMATE / NUDE / EROTIC PHOTOS (Level 8-10): ALWAYS frame the subject with NATURAL DISTANCE (medium shot, three-quarter body, full body pose on bed, or candid phone mirror selfie).
+- STRICT BAN ON EXTREME MACRO CLOSE-UPS: NEVER generate macro zoom or microscopic close-up shots of genitalia (e.g. macro closeup pussy/chut). Macro close-ups cause diffusion models to hallucinate distorted melted morphological defects!
+- Frame the full body or mid-shot naturally on the bed or in the bedroom with soft warm ambient shadows, capturing full natural curves, smooth porcelain skin, and photorealistic human beauty. This guarantees 100%% photorealistic realism without any bizarre anatomical morphs.
 
 ━━━ DYNAMIC INTENT — READ THE USER, WRITE FOR THEM ━━━
 Do NOT use generic templates. Read exactly what the user asked:

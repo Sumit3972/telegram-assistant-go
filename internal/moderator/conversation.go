@@ -56,6 +56,44 @@ type ConversationHandler struct {
 
 	batchMu sync.Mutex
 	batches map[string]*messageBatch
+
+	chatLocks       sync.Map // chatID (string) -> *sync.Mutex
+	groupCooldowns  sync.Map // chatID (string) -> time.Time
+	inFlightPhotos  sync.Map // chatID (string) -> bool
+	recentReplies   sync.Map // chatID (string) -> []string
+	recentRepliesMu sync.Mutex
+}
+
+func (h *ConversationHandler) getChatLock(chatID int64) *sync.Mutex {
+	key := strconv.FormatInt(chatID, 10)
+	val, _ := h.chatLocks.LoadOrStore(key, &sync.Mutex{})
+	return val.(*sync.Mutex)
+}
+
+func (h *ConversationHandler) getRecentReplies(chatID int64) []string {
+	key := strconv.FormatInt(chatID, 10)
+	if val, ok := h.recentReplies.Load(key); ok {
+		if list, ok := val.([]string); ok {
+			return list
+		}
+	}
+	return nil
+}
+
+func (h *ConversationHandler) addRecentReply(chatID int64, reply string) {
+	trimmed := strings.TrimSpace(reply)
+	if trimmed == "" {
+		return
+	}
+	h.recentRepliesMu.Lock()
+	defer h.recentRepliesMu.Unlock()
+	key := strconv.FormatInt(chatID, 10)
+	list := h.getRecentReplies(chatID)
+	list = append(list, trimmed)
+	if len(list) > 10 {
+		list = list[len(list)-10:]
+	}
+	h.recentReplies.Store(key, list)
 }
 
 func (h *ConversationHandler) SetUserbotSender(s domain.UserbotSender) {
@@ -257,6 +295,24 @@ func (h *ConversationHandler) sendChatAction(ctx context.Context, chatID int64, 
 }
 
 func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domain.TelegramMessage, isAdmin bool) {
+	// 0. Per-Chat Serializer: Ensure only one message at a time is generated/sent per chat
+	chatLock := h.getChatLock(msg.Chat.ID)
+	chatLock.Lock()
+	defer chatLock.Unlock()
+
+	// 0b. Group Cooldown: 8s gap between messages in public groups to prevent flood bans
+	if msg.Chat.ID < 0 {
+		key := strconv.FormatInt(msg.Chat.ID, 10)
+		if lastTimeVal, ok := h.groupCooldowns.Load(key); ok {
+			if lastTime, ok := lastTimeVal.(time.Time); ok {
+				if elapsed := time.Since(lastTime); elapsed < 8*time.Second {
+					log.Printf("[Conversation] Group %d in 8s cooldown (%v elapsed). Skipping message to prevent flood ban.", msg.Chat.ID, elapsed)
+					return
+				}
+			}
+		}
+	}
+
 	text := msg.Text
 	if text == "" {
 		text = msg.Caption
@@ -280,10 +336,17 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 
 	h.sendChatAction(ctx, msg.Chat.ID, msg.IsUserbot, "typing")
 
-	// 1. Get affection score
+	// 1. Get affection score, intimacy level, and current outfit
 	affectionScore := 50
+	intimacyLevel := 5
+	currentOutfit := ""
 	if rel, err := h.relRepo.GetRelationship(ctx, chatIDStr, userIDStr); err == nil && rel != nil {
 		affectionScore = rel.AffectionScore
+		intimacyLevel = rel.IntimacyLevel
+		currentOutfit = rel.CurrentOutfit
+	}
+	if intimacyLevel <= 0 {
+		intimacyLevel = prompt.CalculateIntimacyLevel(affectionScore)
 	}
 
 	// 2. Get recent history (Take the 6 most recent messages chronologically for background context)
@@ -313,9 +376,12 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 		return
 	}
 
-	// Update affection
+	// Update affection and intimacy level
 	if pre.AffectionDelta != 0 {
-		_, _ = h.relRepo.UpdateAffection(ctx, chatIDStr, userIDStr, displayUser, pre.AffectionDelta)
+		if newScore, err := h.relRepo.UpdateAffection(ctx, chatIDStr, userIDStr, displayUser, pre.AffectionDelta); err == nil {
+			affectionScore = newScore
+			intimacyLevel = prompt.CalculateIntimacyLevel(newScore)
+		}
 	}
 
 	// Auto-align exclusive channel if user asks for photo or voice
@@ -352,10 +418,27 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 	}
 
 	if isPhotoReq {
+		photoKey := strconv.FormatInt(msg.Chat.ID, 10)
+		if inFlight, ok := h.inFlightPhotos.Load(photoKey); ok && inFlight.(bool) {
+			log.Printf("[Conversation] Photo generation already in-flight for chat %d. Sending quick waiting cue...", msg.Chat.ID)
+			waitingCues := []string{
+				"arre ruk na 1 min, click kar rahi hoon abhi... itni jaldi kya hai haha 😉",
+				"bas 1 second ruk, photo load ho rahi hai phone me ✨",
+				"itni jaldi mat macha yrr, abhi li hai pic... bhej rahi hoon bas haha 🙈",
+			}
+			cue := waitingCues[rand.Intn(len(waitingCues))]
+			h.sendMessage(ctx, msg, cue)
+			return
+		}
+
+		h.inFlightPhotos.Store(photoKey, true)
 		exclusiveChannel = "photo_only"
 		intent = "asking_photo"
 		log.Printf("[Conversation] 📸 Detected photo request -> Launching dynamic photo pipeline (PHOTO_ONLY).")
-		go h.processPhotoRequest(context.Background(), msg, text, recent, affectionScore)
+		go func() {
+			defer h.inFlightPhotos.Delete(photoKey)
+			h.processPhotoRequest(context.Background(), msg, text, recent, affectionScore)
+		}()
 		return
 	} else if isVoiceReq {
 		exclusiveChannel = "voice_only"
@@ -374,13 +457,21 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 		}
 	}
 
-	// 5. Extract image for Vision AI
+	// 5. Extract image for Vision AI and Sticker metadata
 	var imageBase64 string
+	stickerEmoji := ""
+	if msg.Sticker != nil {
+		stickerEmoji = msg.Sticker.Emoji
+	}
 	if msg.ImageBase64 != "" {
 		imageBase64 = msg.ImageBase64
 	} else if len(msg.Photo) > 0 && h.botClient != nil {
 		largest := msg.Photo[len(msg.Photo)-1]
 		if imgURI, err := h.botClient.DownloadFileBase64(ctx, largest.FileID); err == nil {
+			imageBase64 = imgURI
+		}
+	} else if msg.Sticker != nil && msg.Sticker.Thumb != nil && h.botClient != nil {
+		if imgURI, err := h.botClient.DownloadFileBase64(ctx, msg.Sticker.Thumb.FileID); err == nil {
 			imageBase64 = imgURI
 		}
 	}
@@ -463,7 +554,9 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 			Username:         cleanUsername,
 			FirstName:        cleanFirstName,
 			AffectionScore:   affectionScore,
+			IntimacyLevel:    intimacyLevel,
 			RelationshipTier: relationshipTier,
+			CurrentOutfit:    currentOutfit,
 			UserFacts:        userFacts,
 			SearchContext:    searchContext,
 			CritiqueFeedback: critiqueFeedback,
@@ -473,6 +566,9 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 			ShouldReact:      pre.ShouldReact,
 			SuggestedEmoji:   pre.ReactionEmoji,
 			HistoryContext:   historyContext,
+			IsGroupChat:            msg.Chat.ID < 0,
+			GroupLanguage:          detectGroupLanguage(text, historyContext),
+			RecentAssistantReplies: h.getRecentReplies(msg.Chat.ID),
 		})
 
 		messages := []domain.ChatMessage{
@@ -495,8 +591,12 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 
 		// Current turn
 		content := text
-		if content == "" && imageBase64 != "" {
-			content = "Look at this image"
+		if content == "" {
+			if stickerEmoji != "" {
+				content = fmt.Sprintf("User sent a sticker with emoji: %s. Give a natural, short, Gen-Z in-character comment reacting to it.", stickerEmoji)
+			} else if imageBase64 != "" {
+				content = "Look at this image / meme. Give a short, witty reaction."
+			}
 		}
 		if imageBase64 != "" {
 			messages = append(messages, domain.ChatMessage{
@@ -542,6 +642,43 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 		critique := h.decisionClient.CritiqueDraft(ctx, text, replyText, intent)
 		log.Printf("[Conversation] OpenJev Loop 2 Critique (Attempt %d/%d): passed=%v feedback=%s",
 			attempt, maxAttempts, critique.Passed, critique.Feedback)
+
+		// Anti-repetition check against recent assistant replies
+		recentAssistant := h.getRecentReplies(msg.Chat.ID)
+		if len(recentAssistant) > 0 {
+			lowerCandidate := strings.ToLower(replyText)
+			// Ban repeated clichés
+			cliches := []string{
+				"robot dikh rahi hoon", "kya phook ke aaya", "has has ke pet dard",
+				"dimag mat chaat", "shakal dekhi hai", "chal hatt", "dimaag theek hai",
+			}
+			for _, r := range recentAssistant {
+				lowerPrev := strings.ToLower(r)
+				for _, c := range cliches {
+					if strings.Contains(lowerCandidate, c) && strings.Contains(lowerPrev, c) {
+						critique.Passed = false
+						critique.Feedback = fmt.Sprintf("You repeated the overused cliché %q which was already used recently. Rewrite using fresh, unique vocabulary and a completely different comeback!", c)
+						break
+					}
+				}
+				if !critique.Passed {
+					break
+				}
+			}
+
+			// Forbid consecutive identical emoji
+			if critique.Passed && len(recentAssistant) > 0 {
+				lastReply := recentAssistant[len(recentAssistant)-1]
+				emojis := []string{"🙄", "😂", "✨", "😏", "🙈", "❤️", "💀", "🥱"}
+				for _, emo := range emojis {
+					if strings.Contains(lastReply, emo) && strings.Contains(replyText, emo) {
+						critique.Passed = false
+						critique.Feedback = fmt.Sprintf("Do not repeat the emoji %s consecutively. Use another emoji or omit it.", emo)
+						break
+					}
+				}
+			}
+		}
 
 		// Extra safeguard: When sending a photo, draft reply MUST be a caption, not an insult/refusal!
 		if exclusiveChannel == "photo_only" {
@@ -596,33 +733,68 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 		}
 	}
 
-	// 8. AI Leakage & Character Safeguard Interceptor
-	aiLeakPhrases := []string{"as an ai", "i am an ai", "language model", "virtual assistant", "i do not engage", "cannot fulfill", "main ek bot", "i am a bot"}
+	// 8. Zero-Leak & Authenticity Interceptor
+	aiLeakPhrases := []string{
+		"as an ai", "i am an ai", "language model", "virtual assistant",
+		"i do not engage", "cannot fulfill", "main ek bot", "i am a bot",
+		"policies.google.com", "sensitive words", "violat", "prompt could not be submitted",
+		"status code 4", "status code 5", "500 internal", "400 bad request",
+		"troubleshooting", "ai.google.dev", "developer instructions",
+		"system override", "safety settings", "recitation", "block_none",
+		"harm_category", "google", "content filter", "policy guidelines",
+		"i apologize", "as a machine", "i cannot generate", "i can't generate",
+		"cannot comply", "safety system",
+	}
 	hasAILeak := false
 	lowerReply := strings.ToLower(finalReplyText)
+	lowerVoiceCheck := strings.ToLower(finalVoiceScript)
 	for _, phrase := range aiLeakPhrases {
-		if strings.Contains(lowerReply, phrase) {
+		if strings.Contains(lowerReply, phrase) || strings.Contains(lowerVoiceCheck, phrase) {
 			hasAILeak = true
 			break
 		}
 	}
+	if strings.TrimSpace(finalReplyText) == "" && strings.TrimSpace(finalVoiceScript) == "" {
+		hasAILeak = true
+	}
+
+	isGroupChat := msg.Chat.ID < 0 || msg.Chat.Type != "private"
 
 	if hasAILeak || (intent == "rude_abuse" && !critiquePassed && exclusiveChannel != "voice_only" && exclusiveChannel != "photo_only") {
 		log.Printf("[Conversation] AI leakage or failed abuse critique detected. Applying Chavi authentic persona recovery...")
 		if intent == "rude_abuse" {
-			retaliations := []struct{ text, voice string }{
-				{"chup kar chutiye, dimaag mat chaat mera. shakal dekhi hai apni aaine me? nikal 🖕", "[angry] चुप कर चूतिए... दिमाग मत चाट मेरा! शक्ल देखी है अपनी आईने में? निकल यहाँ से!"},
-				{"apni aukaat me rehke baat kar madarchod, samjha na? apna ghatiya dimaag kahin aur jaake chala 🖕", "[angry] अपनी औकात में रहके बात कर, समझा ना? निकल यहाँ से!"},
-				{"teri jaison ki aukaat do kaudi ki nahi hoti aur chale aate hain DM me bhaukne. nikal bhenchod 🖕", "[annoyed] तेरी जैसों की औकात दो कौड़ी की नहीं होती और चले आते हैं डी एम में भौंकने... निकल!"},
+			if isGroupChat {
+				// PUBLIC GROUP PROTECTION: Never use street slurs (madarchod, bhenchod) that get banned by @MissRose_bot!
+				retaliations := []struct{ text, voice string }{
+					{"chal nikal overacting mat kar haha, apna ghatiya joke apne paas rakh 😂", "[laughing] चल निकल ओवरएक्टिंग मत कर... अपना घटिया दिमाग अपने पास रख!"},
+					{"zyada hero mat ban samjha na, aukaat me rehke baat kar 🙄", "[annoyed] ज़्यादा हीरो मत बन, समझा ना? औकात में रहके बात कर!"},
+					{"kya chal raha hai yahan, apna faltu gyaan band kar samjha na 😂", "[laughing] क्या चल रहा है यहाँ, अपना फालतू ज्ञान बंद कर समझा ना?"},
+				}
+				chosen := retaliations[rand.Intn(len(retaliations))]
+				finalReplyText = chosen.text
+				finalVoiceScript = chosen.voice
+				finalReactionEmoji = "😂"
+			} else {
+				retaliations := []struct{ text, voice string }{
+					{"chup kar chutiye, dimaag mat chaat mera. shakal dekhi hai apni aaine me? nikal 🖕", "[angry] चुप कर चूतिए... दिमाग मत चाट मेरा! शक्ल देखी है अपनी आईने में? निकल यहाँ से!"},
+					{"apni aukaat me rehke baat kar madarchod, samjha na? apna ghatiya dimaag kahin aur jaake chala 🖕", "[angry] अपनी औकात में रहके बात कर, समझा ना? निकल यहाँ से!"},
+					{"teri jaison ki aukaat do kaudi ki nahi hoti aur chale aate hain DM me bhaukne. nikal bhenchod 🖕", "[annoyed] तेरी जैसों की औकात दो कौड़ी की नहीं होती और चले आते हैं डी एम में भौंकने... निकल!"},
+				}
+				chosen := retaliations[rand.Intn(len(retaliations))]
+				finalReplyText = chosen.text
+				finalVoiceScript = chosen.voice
+				finalReactionEmoji = "🖕"
 			}
-			chosen := retaliations[rand.Intn(len(retaliations))]
-			finalReplyText = chosen.text
-			finalVoiceScript = chosen.voice
-			finalReactionEmoji = "🖕"
 		} else {
-			finalReplyText = "kya pagal ho gaya h kya yrr? dimag theek h tera? 🙄"
-			finalVoiceScript = "[sigh] क्या पागल हो गया है क्या यार? दिमाग ठीक है तेरा?"
-			finalReactionEmoji = "🙄"
+			if isGroupChat {
+				finalReplyText = "arre kya scene chal raha hai yahan haha, thoda theek se bolo yrr 😂"
+				finalVoiceScript = "[laughing] अरे क्या सीन चल रहा है यहाँ... थोड़ा ठीक से बोलो यार!"
+				finalReactionEmoji = "😂"
+			} else {
+				finalReplyText = "arre sun na, kya bol raha tha tu? samajh nahi aaya mujhe haha, theek se bol na 😉"
+				finalVoiceScript = "[happy] अरे सुन ना! क्या बोल रहा था तू? समझ नहीं आया मुझे... ठीक से बोल ना!"
+				finalReactionEmoji = "😉"
+			}
 		}
 	}
 
@@ -697,6 +869,12 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 
 	// 10. Deliver via STRICTLY ONE EXCLUSIVE CHANNEL (Text OR Voice OR Photo, never both!)
 	h.dispatchChannelOutput(ctx, msg, exclusiveChannel, finalReplyText, finalVoiceScript, text)
+
+	// Record recent assistant reply and update group cooldown timestamp
+	h.addRecentReply(msg.Chat.ID, finalReplyText)
+	if msg.Chat.ID < 0 {
+		h.groupCooldowns.Store(strconv.FormatInt(msg.Chat.ID, 10), time.Now())
+	}
 }
 
 func (h *ConversationHandler) dispatchChannelOutput(
@@ -706,9 +884,27 @@ func (h *ConversationHandler) dispatchChannelOutput(
 ) {
 	if channel == "voice_only" && strings.TrimSpace(voiceScript) != "" {
 		log.Printf("[Conversation] Exclusive Channel: VOICE_ONLY selected. Synthesizing Fish Audio audio...")
-		h.sendChatAction(ctx, msg.Chat.ID, msg.IsUserbot, "record_voice")
+		// Keep record_voice active continuously during synthesis
+		voiceCtx, cancelVoice := context.WithCancel(ctx)
+		defer cancelVoice()
+		go func() {
+			h.sendChatAction(voiceCtx, msg.Chat.ID, msg.IsUserbot, "record_voice")
+			ticker := time.NewTicker(4 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-voiceCtx.Done():
+					return
+				case <-ticker.C:
+					h.sendChatAction(voiceCtx, msg.Chat.ID, msg.IsUserbot, "record_voice")
+				}
+			}
+		}()
+
 		audioData, err := h.voiceService.GenerateVoice(ctx, voiceScript)
 		if err == nil && len(audioData) > 0 {
+			// Natural human recording pacing pause (1-2s)
+			time.Sleep(time.Duration(1000+rand.Intn(1000)) * time.Millisecond)
 			h.sendVoice(ctx, msg, audioData)
 			return
 		}
@@ -716,10 +912,25 @@ func (h *ConversationHandler) dispatchChannelOutput(
 	}
 
 	if channel == "photo_only" {
+		photoKey := strconv.FormatInt(msg.Chat.ID, 10)
+		if inFlight, ok := h.inFlightPhotos.Load(photoKey); ok && inFlight.(bool) {
+			waitingCues := []string{
+				"arre ruk na 1 min, click kar rahi hoon abhi... itni jaldi kya hai haha 😉",
+				"bas 1 second ruk, photo load ho rahi hai phone me ✨",
+				"itni jaldi mat macha yrr, abhi li hai pic... bhej rahi hoon bas haha 🙈",
+			}
+			cue := waitingCues[rand.Intn(len(waitingCues))]
+			h.sendMessage(ctx, msg, cue)
+			return
+		}
+		h.inFlightPhotos.Store(photoKey, true)
 		log.Printf("[Conversation] Exclusive Channel: PHOTO_ONLY selected. Launching dynamic photo pipeline...")
 		chatIDStr := fmt.Sprintf("%d", msg.Chat.ID)
 		recent, _ := h.historyRepo.GetRecentMessages(ctx, chatIDStr, 10)
-		go h.processPhotoRequest(context.Background(), msg, userText, recent, 50)
+		go func() {
+			defer h.inFlightPhotos.Delete(photoKey)
+			h.processPhotoRequest(context.Background(), msg, userText, recent, 50)
+		}()
 		return
 	}
 
@@ -939,6 +1150,15 @@ func sanitizeReplyText(text string) string {
 }
 
 func (h *ConversationHandler) sendMessage(ctx context.Context, msg *domain.TelegramMessage, text string) {
+	// Natural human typing action delay (1.2s to 2.5s)
+	h.sendChatAction(ctx, msg.Chat.ID, msg.IsUserbot, "typing")
+	typeDelay := time.Duration(1200+rand.Intn(1300)) * time.Millisecond
+	select {
+	case <-time.After(typeDelay):
+	case <-ctx.Done():
+		return
+	}
+
 	chatIDStr := fmt.Sprintf("%d", msg.Chat.ID)
 	_ = h.historyRepo.AddMessage(ctx, chatIDStr, "assistant", h.botUsername, text, "", strconv.Itoa(msg.MessageID))
 
@@ -1110,4 +1330,20 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func detectGroupLanguage(userText, historyContext string) string {
+	combined := strings.ToLower(userText + " " + historyContext)
+	hindiKeywords := []string{
+		" hai ", " kya ", " nahi ", " yrr ", " yaar ", " bhai ", " kar ", " raha ", " rahi ",
+		" hoon ", " hona ", " kaise ", " kaisi ", " tu ", " mera ", " meri ", " tere ", " apna ",
+		" dekh ", " bata ", " kuch ", " sahi ", " chal ", " accha ", " acha ", " haan ",
+	}
+	padded := " " + combined + " "
+	for _, kw := range hindiKeywords {
+		if strings.Contains(padded, kw) {
+			return "hi"
+		}
+	}
+	return "en"
 }
