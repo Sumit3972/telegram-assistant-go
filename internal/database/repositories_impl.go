@@ -907,7 +907,11 @@ func (r *blockedUserRepo) IsUserBlocked(ctx context.Context, chatID, userID stri
 }
 
 func (r *blockedUserRepo) UnblockUser(ctx context.Context, chatID, userID string) error {
-	_, err := r.pool.Exec(ctx, `DELETE FROM blocked_users WHERE chat_id = $1 AND user_id = $2`, chatID, userID)
+	if chatID == "" {
+		_, err := r.pool.Exec(ctx, `DELETE FROM blocked_users WHERE user_id = $1`, userID)
+		return err
+	}
+	_, err := r.pool.Exec(ctx, `DELETE FROM blocked_users WHERE (chat_id = $1 OR $1 = '') AND user_id = $2`, chatID, userID)
 	return err
 }
 
@@ -988,5 +992,10 @@ func (r *abuseRecordRepo) GetAbuseHistory(ctx context.Context, chatID, userID st
 		}
 	}
 	return list, nil
+}
+
+func (r *abuseRecordRepo) ClearAbuseStrikes(ctx context.Context, userID string) error {
+	_, err := r.pool.Exec(ctx, `DELETE FROM abuse_records WHERE user_id = $1`, userID)
+	return err
 }
 

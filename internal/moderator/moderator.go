@@ -103,7 +103,7 @@ func NewModerator(
 		karmaHandler:   NewKarmaHandler(karmaRepo, botClient),
 		captchaHandler: NewCaptchaHandler(captchaRepo, botClient),
 		mentionHandler: NewAdminMentionHandler(adminRepo, mentionRepo, historyRepo, botClient),
-		commandHandler: NewCommandHandler(groupRepo, adminRepo, warningRepo, modLogRepo, historyRepo, karmaRepo, shipRepo, aiClient, botClient, cfg.MyPersonalName),
+		commandHandler: NewCommandHandler(groupRepo, adminRepo, warningRepo, modLogRepo, historyRepo, karmaRepo, shipRepo, blockedRepo, abuseRepo, aiClient, botClient, cfg.MyPersonalName),
 		autoModHandler: NewAutoModHandler(groupRepo, warningRepo, modLogRepo, botClient),
 		convHandler: NewConversationHandler(
 			aiClient, imgService, voiceService, searchService, musicService,
@@ -118,6 +118,7 @@ func NewModerator(
 
 func (m *Moderator) SetUserbotSender(s domain.UserbotSender) {
 	m.convHandler.SetUserbotSender(s)
+	m.commandHandler.SetUserbotSender(s)
 }
 
 func (m *Moderator) HandleUpdate(ctx context.Context, update *domain.TelegramUpdate) {
@@ -193,9 +194,10 @@ func (m *Moderator) HandleUpdate(ctx context.Context, update *domain.TelegramUpd
 
 	// 4. Handle Private Chat (DM)
 	if msg.Chat.Type == "private" {
-		if strings.HasPrefix(text, "/start") {
-			m.commandHandler.HandleCommand(ctx, msg, false)
-			return
+		if strings.HasPrefix(text, "/") || strings.HasPrefix(text, ".") {
+			if handled := m.commandHandler.HandleCommand(ctx, msg, true); handled {
+				return
+			}
 		}
 		// Buffer rapid consecutive messages so AI replies to the complete context at once
 		m.convHandler.EnqueueConversation(context.Background(), msg, false)
@@ -225,8 +227,8 @@ func (m *Moderator) HandleUpdate(ctx context.Context, update *domain.TelegramUpd
 		_ = m.adminRepo.RegisterAdmin(ctx, chatIDStr, userIDStr, msg.From.Username, "")
 	}
 
-	// 7. Check Slash Commands
-	if strings.HasPrefix(text, "/") {
+	// 7. Check Commands (/ or .)
+	if strings.HasPrefix(text, "/") || strings.HasPrefix(text, ".") {
 		if handled := m.commandHandler.HandleCommand(ctx, msg, isAdmin); handled {
 			return
 		}

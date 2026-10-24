@@ -97,6 +97,147 @@ func parseGramJSSession(raw string) (*session.Data, error) {
 	}, nil
 }
 
+func (ub *UserbotManager) extractReplyTo(ctx context.Context, e tg.Entities, msg *tg.Message, selfID int64) *domain.TelegramMessage {
+	if msg.ReplyTo == nil {
+		return nil
+	}
+	header, ok := msg.ReplyTo.(*tg.MessageReplyHeader)
+	if !ok || header.ReplyToMsgID <= 0 {
+		return nil
+	}
+
+	replySenderID := int64(0)
+	replyUsername := ""
+	replyFirstName := ""
+	replyText := ""
+	var replyImageBase64 string
+
+	if header.ReplyToPeerID != nil {
+		if peerUser, ok := header.ReplyToPeerID.(*tg.PeerUser); ok {
+			replySenderID = peerUser.UserID
+			if u, ok := e.Users[replySenderID]; ok {
+				replyUsername = u.Username
+				replyFirstName = u.FirstName
+			}
+		}
+	}
+
+	if ub.rawAPI != nil {
+		if peerChannel, ok := msg.PeerID.(*tg.PeerChannel); ok {
+			if inputPeer, err := ub.getInputPeer(ctx, peerChannel.ChannelID); err == nil {
+				if inCh, ok := inputPeer.(*tg.InputPeerChannel); ok {
+					res, err := ub.rawAPI.ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
+						Channel: &tg.InputChannel{ChannelID: inCh.ChannelID, AccessHash: inCh.AccessHash},
+						ID:      []tg.InputMessageClass{&tg.InputMessageID{ID: header.ReplyToMsgID}},
+					})
+					if err == nil {
+						switch v := res.(type) {
+						case *tg.MessagesChannelMessages:
+							for _, m := range v.Messages {
+								if fullM, ok := m.(*tg.Message); ok {
+									replyText = fullM.Message
+									if fullM.Media != nil {
+										if img, err := ub.downloadMediaBase64(ctx, fullM.Media); err == nil && img != "" {
+											replyImageBase64 = img
+										}
+									}
+									if replySenderID == 0 {
+										if fullM.Out {
+											replySenderID = selfID
+											replyUsername = ub.MyUsername
+											replyFirstName = ub.MyName
+										} else if pUser, ok := fullM.FromID.(*tg.PeerUser); ok {
+											replySenderID = pUser.UserID
+											for _, u := range v.Users {
+												if user, ok := u.(*tg.User); ok && user.ID == replySenderID {
+													replyUsername = user.Username
+													replyFirstName = user.FirstName
+													break
+												}
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		} else {
+			res, err := ub.rawAPI.MessagesGetMessages(ctx, []tg.InputMessageClass{&tg.InputMessageID{ID: header.ReplyToMsgID}})
+			if err == nil {
+				switch v := res.(type) {
+				case *tg.MessagesMessages:
+					for _, m := range v.Messages {
+						if fullM, ok := m.(*tg.Message); ok {
+							replyText = fullM.Message
+							if fullM.Media != nil {
+								if img, err := ub.downloadMediaBase64(ctx, fullM.Media); err == nil && img != "" {
+									replyImageBase64 = img
+								}
+							}
+							if replySenderID == 0 {
+								if fullM.Out {
+									replySenderID = selfID
+									replyUsername = ub.MyUsername
+									replyFirstName = ub.MyName
+								} else if pUser, ok := fullM.FromID.(*tg.PeerUser); ok {
+									replySenderID = pUser.UserID
+									for _, u := range v.Users {
+										if user, ok := u.(*tg.User); ok && user.ID == replySenderID {
+											replyUsername = user.Username
+											replyFirstName = user.FirstName
+											break
+										}
+									}
+								}
+							}
+						}
+					}
+				case *tg.MessagesMessagesSlice:
+					for _, m := range v.Messages {
+						if fullM, ok := m.(*tg.Message); ok {
+							replyText = fullM.Message
+							if fullM.Media != nil {
+								if img, err := ub.downloadMediaBase64(ctx, fullM.Media); err == nil && img != "" {
+									replyImageBase64 = img
+								}
+							}
+							if replySenderID == 0 {
+								if fullM.Out {
+									replySenderID = selfID
+									replyUsername = ub.MyUsername
+									replyFirstName = ub.MyName
+								} else if pUser, ok := fullM.FromID.(*tg.PeerUser); ok {
+									replySenderID = pUser.UserID
+									for _, u := range v.Users {
+										if user, ok := u.(*tg.User); ok && user.ID == replySenderID {
+											replyUsername = user.Username
+											replyFirstName = user.FirstName
+											break
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return &domain.TelegramMessage{
+		MessageID: header.ReplyToMsgID,
+		From: &domain.TelegramUser{
+			ID:        replySenderID,
+			Username:  replyUsername,
+			FirstName: replyFirstName,
+		},
+		Text:        replyText,
+		ImageBase64: replyImageBase64,
+	}
+}
+
 func (ub *UserbotManager) Start(ctx context.Context) error {
 	if ub.cfg.TelegramAPIID == 0 || ub.cfg.TelegramAPIHash == "" || ub.cfg.TelegramSessionString == "" {
 		log.Println("[Userbot] Credentials not configured. MTProto Userbot disabled.")
@@ -124,22 +265,81 @@ func (ub *UserbotManager) Start(ctx context.Context) error {
 		}
 
 		if msg.Out {
-			// Record outgoing message from self in chat history so replies to it can be recognized
 			chatID := int64(0)
+			chatType := "private"
+			title := ""
+			var inputPeer tg.InputPeerClass
+
 			if peerUser, ok := msg.PeerID.(*tg.PeerUser); ok {
 				chatID = peerUser.UserID
-			} else if peerChat, ok := msg.PeerID.(*tg.PeerChat); ok {
-				chatID = peerChat.ChatID
-			} else if peerChannel, ok := msg.PeerID.(*tg.PeerChannel); ok {
-				chatID = peerChannel.ChannelID
-			}
-			if chatID != 0 && ub.onMessage != nil {
-				selfID := int64(6009675121)
-				if ub.MyUserID != "" {
-					if id, err := strconv.ParseInt(ub.MyUserID, 10, 64); err == nil && id > 0 {
-						selfID = id
+				chatType = "private"
+				if u, ok := e.Users[chatID]; ok {
+					inputPeer = u.AsInputPeer()
+					title = strings.TrimSpace(u.FirstName + " " + u.LastName)
+				}
+				if inputPeer == nil && chatID > 0 {
+					inputPeer = &tg.InputPeerUserFromMessage{
+						Peer:   &tg.InputPeerSelf{},
+						MsgID:  msg.ID,
+						UserID: chatID,
 					}
 				}
+			} else if peerChat, ok := msg.PeerID.(*tg.PeerChat); ok {
+				chatID = peerChat.ChatID
+				chatType = "group"
+				if c, ok := e.Chats[chatID]; ok {
+					title = c.Title
+					inputPeer = c.AsInputPeer()
+				}
+			} else if peerChannel, ok := msg.PeerID.(*tg.PeerChannel); ok {
+				chatID = peerChannel.ChannelID
+				chatType = "supergroup"
+				if ch, ok := e.Channels[chatID]; ok {
+					title = ch.Title
+					inputPeer = ch.AsInputPeer()
+				} else {
+					inputPeer = &tg.InputPeerChannelFromMessage{
+						Peer:      &tg.InputPeerSelf{},
+						MsgID:     msg.ID,
+						ChannelID: peerChannel.ChannelID,
+					}
+				}
+			}
+
+			if inputPeer != nil {
+				ub.peerMu.Lock()
+				ub.peerCache[chatID] = inputPeer
+				if chatType == "supergroup" {
+					botChatID := -1000000000000 - chatID
+					ub.peerCache[botChatID] = inputPeer
+				} else if chatType == "private" && chatID > 0 {
+					ub.peerCache[chatID] = inputPeer
+				}
+				ub.peerMu.Unlock()
+			}
+
+			selfID := int64(8542441463)
+			if ub.MyUserID != "" {
+				if id, err := strconv.ParseInt(ub.MyUserID, 10, 64); err == nil && id > 0 {
+					selfID = id
+				}
+			}
+
+			selfUsername := ub.MyUsername
+			if selfUsername == "" {
+				selfUsername = "Sumit3972"
+			}
+			selfName := ub.MyName
+			if selfName == "" {
+				selfName = "Sumit"
+			}
+
+			var replyToMsg *domain.TelegramMessage
+			if msg.ReplyTo != nil {
+				replyToMsg = ub.extractReplyTo(ctx, e, msg, selfID)
+			}
+
+			if chatID != 0 && ub.onMessage != nil {
 				ub.onMessage(ctx, &domain.TelegramUpdate{
 					UpdateID: msg.ID,
 					Message: &domain.TelegramMessage{
@@ -147,14 +347,19 @@ func (ub *UserbotManager) Start(ctx context.Context) error {
 						IsUserbot: true,
 						From: &domain.TelegramUser{
 							ID:        selfID,
-							FirstName: ub.MyName,
-							Username:  ub.MyUsername,
+							FirstName: selfName,
+							Username:  selfUsername,
 						},
 						Chat: domain.TelegramChat{
-							ID: chatID,
+							ID:        chatID,
+							Type:      chatType,
+							Title:     title,
+							FirstName: selfName,
+							Username:  selfUsername,
 						},
-						Text: msg.Message,
-						Date: int64(msg.Date),
+						ReplyToMessage: replyToMsg,
+						Text:           msg.Message,
+						Date:           int64(msg.Date),
 					},
 				})
 			}
@@ -238,149 +443,14 @@ func (ub *UserbotManager) Start(ctx context.Context) error {
 		log.Printf("[Userbot MTProto Message] chat=%d (%s), from=%s (@%s, ID: %d), text=%q",
 			chatID, chatType, firstName, username, senderID, msg.Message)
 
-		var replyToMsg *domain.TelegramMessage
-		if msg.ReplyTo != nil {
-			if header, ok := msg.ReplyTo.(*tg.MessageReplyHeader); ok && header.ReplyToMsgID > 0 {
-				replySenderID := int64(0)
-				replyUsername := ""
-				replyFirstName := ""
-				replyText := ""
-
-				selfID := int64(8542441463)
-				if ub.MyUserID != "" {
-					if id, err := strconv.ParseInt(ub.MyUserID, 10, 64); err == nil && id > 0 {
-						selfID = id
-					}
-				}
-
-				if header.ReplyToPeerID != nil {
-					if peerUser, ok := header.ReplyToPeerID.(*tg.PeerUser); ok {
-						replySenderID = peerUser.UserID
-						if u, ok := e.Users[replySenderID]; ok {
-							replyUsername = u.Username
-							replyFirstName = u.FirstName
-						}
-					}
-				}
-
-				// If reply sender not determined yet, fetch the replied message directly from MTProto
-				var replyImageBase64 string
-				if ub.rawAPI != nil {
-					if peerChannel, ok := msg.PeerID.(*tg.PeerChannel); ok {
-						if inputPeer, err := ub.getInputPeer(ctx, peerChannel.ChannelID); err == nil {
-							if inCh, ok := inputPeer.(*tg.InputPeerChannel); ok {
-								res, err := ub.rawAPI.ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
-									Channel: &tg.InputChannel{ChannelID: inCh.ChannelID, AccessHash: inCh.AccessHash},
-									ID:      []tg.InputMessageClass{&tg.InputMessageID{ID: header.ReplyToMsgID}},
-								})
-								if err == nil {
-									switch v := res.(type) {
-									case *tg.MessagesChannelMessages:
-										for _, m := range v.Messages {
-											if fullM, ok := m.(*tg.Message); ok {
-												replyText = fullM.Message
-												if fullM.Media != nil {
-													if img, err := ub.downloadMediaBase64(ctx, fullM.Media); err == nil && img != "" {
-														replyImageBase64 = img
-													}
-												}
-												if replySenderID == 0 {
-													if fullM.Out {
-														replySenderID = selfID
-														replyUsername = ub.MyUsername
-														replyFirstName = ub.MyName
-													} else if pUser, ok := fullM.FromID.(*tg.PeerUser); ok {
-														replySenderID = pUser.UserID
-														for _, u := range v.Users {
-															if user, ok := u.(*tg.User); ok && user.ID == replySenderID {
-																replyUsername = user.Username
-																replyFirstName = user.FirstName
-																break
-															}
-														}
-													}
-												}
-											}
-										}
-									}
-								}
-							}
-						}
-					} else {
-						res, err := ub.rawAPI.MessagesGetMessages(ctx, []tg.InputMessageClass{&tg.InputMessageID{ID: header.ReplyToMsgID}})
-						if err == nil {
-							switch v := res.(type) {
-							case *tg.MessagesMessages:
-								for _, m := range v.Messages {
-									if fullM, ok := m.(*tg.Message); ok {
-										replyText = fullM.Message
-										if fullM.Media != nil {
-											if img, err := ub.downloadMediaBase64(ctx, fullM.Media); err == nil && img != "" {
-												replyImageBase64 = img
-											}
-										}
-										if replySenderID == 0 {
-											if fullM.Out {
-												replySenderID = selfID
-												replyUsername = ub.MyUsername
-												replyFirstName = ub.MyName
-											} else if pUser, ok := fullM.FromID.(*tg.PeerUser); ok {
-												replySenderID = pUser.UserID
-												for _, u := range v.Users {
-													if user, ok := u.(*tg.User); ok && user.ID == replySenderID {
-														replyUsername = user.Username
-														replyFirstName = user.FirstName
-														break
-													}
-												}
-											}
-										}
-									}
-								}
-							case *tg.MessagesMessagesSlice:
-								for _, m := range v.Messages {
-									if fullM, ok := m.(*tg.Message); ok {
-										replyText = fullM.Message
-										if fullM.Media != nil {
-											if img, err := ub.downloadMediaBase64(ctx, fullM.Media); err == nil && img != "" {
-												replyImageBase64 = img
-											}
-										}
-										if replySenderID == 0 {
-											if fullM.Out {
-												replySenderID = selfID
-												replyUsername = ub.MyUsername
-												replyFirstName = ub.MyName
-											} else if pUser, ok := fullM.FromID.(*tg.PeerUser); ok {
-												replySenderID = pUser.UserID
-												for _, u := range v.Users {
-													if user, ok := u.(*tg.User); ok && user.ID == replySenderID {
-														replyUsername = user.Username
-														replyFirstName = user.FirstName
-														break
-													}
-												}
-											}
-										}
-									}
-								}
-							}
-						}
-					}
-				}
-
-				replyToMsg = &domain.TelegramMessage{
-					MessageID: header.ReplyToMsgID,
-					From: &domain.TelegramUser{
-						ID:        replySenderID,
-						Username:  replyUsername,
-						FirstName: replyFirstName,
-					},
-					Text:        replyText,
-					ImageBase64: replyImageBase64,
-				}
+		selfID := int64(8542441463)
+		if ub.MyUserID != "" {
+			if id, err := strconv.ParseInt(ub.MyUserID, 10, 64); err == nil && id > 0 {
+				selfID = id
 			}
 		}
+
+		replyToMsg := ub.extractReplyTo(ctx, e, msg, selfID)
 
 		var imageBase64 string
 		if msg.Media != nil && ub.rawAPI != nil {
@@ -510,6 +580,12 @@ func (ub *UserbotManager) IsAvailable() bool {
 
 // getInputPeer retrieves or dynamically resolves the InputPeer for a given chat ID.
 func (ub *UserbotManager) getInputPeer(ctx context.Context, chatID int64) (tg.InputPeerClass, error) {
+	if ub.MyUserID != "" {
+		if selfID, err := strconv.ParseInt(ub.MyUserID, 10, 64); err == nil && chatID == selfID {
+			return &tg.InputPeerSelf{}, nil
+		}
+	}
+
 	ub.peerMu.RLock()
 	peer, exists := ub.peerCache[chatID]
 	ub.peerMu.RUnlock()
@@ -930,6 +1006,41 @@ func (ub *UserbotManager) UnblockUser(ctx context.Context, userID int64) error {
 
 	log.Printf("[Userbot] ✅ Successfully unblocked user %d natively via MTProto ContactsUnblock!", userID)
 	return nil
+}
+
+// ResolveUsername resolves a Telegram username via MTProto ContactsResolveUsername.
+func (ub *UserbotManager) ResolveUsername(ctx context.Context, username string) (int64, string, error) {
+	ub.senderMu.RLock()
+	rawAPI := ub.rawAPI
+	ub.senderMu.RUnlock()
+
+	if rawAPI == nil {
+		return 0, "", fmt.Errorf("userbot MTProto client is not connected")
+	}
+
+	clean := strings.TrimPrefix(strings.TrimSpace(username), "@")
+	if clean == "" {
+		return 0, "", fmt.Errorf("username is empty")
+	}
+
+	res, err := rawAPI.ContactsResolveUsername(ctx, &tg.ContactsResolveUsernameRequest{
+		Username: clean,
+	})
+	if err != nil {
+		return 0, "", err
+	}
+
+	for _, uClass := range res.GetUsers() {
+		if u, ok := uClass.(*tg.User); ok {
+			ub.peerMu.Lock()
+			ub.peerCache[u.ID] = u.AsInputPeer()
+			ub.peerMu.Unlock()
+			name := strings.TrimSpace(u.FirstName + " " + u.LastName)
+			return u.ID, name, nil
+		}
+	}
+
+	return 0, "", fmt.Errorf("no user found for username %s", clean)
 }
 
 // IsSpamming checks if a user sent more than 3 messages within 10 seconds.

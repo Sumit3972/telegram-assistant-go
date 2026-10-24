@@ -1287,6 +1287,96 @@ func (h *ConversationHandler) executeToolCall(
 			_ = h.modLogRepo.AddLog(ctx, chatIDStr, userIDStr, username, "block_user", reason, 0, "chavi_ai")
 		}
 
+	case "unblock_user":
+		senderUname := ""
+		if msg.From != nil {
+			senderUname = msg.From.Username
+		}
+		if !strings.EqualFold(senderUname, "Sumit3972") {
+			h.sendMessage(ctx, msg, "arre ye permission sirf @Sumit3972 ke paas hai haha, main kisi aur ke kehne pe unblock nahi karti 😉")
+			return
+		}
+
+		userIdentifier, _ := args["user_identifier"].(string)
+		cleanID := strings.TrimPrefix(strings.TrimSpace(userIdentifier), "@")
+		if cleanID == "" {
+			h.sendMessage(ctx, msg, "kisko unblock karna hai uska username ya naam to batao yrr")
+			return
+		}
+
+		blockedList, _ := h.blockedRepo.GetBlockedUsers(ctx)
+		var targetUID, targetUname, targetName, targetChatID string
+		for _, b := range blockedList {
+			if b.UserID == cleanID || strings.EqualFold(strings.TrimPrefix(b.Username, "@"), cleanID) || strings.EqualFold(b.FirstName, cleanID) {
+				targetUID = b.UserID
+				targetUname = b.Username
+				targetName = strings.TrimSpace(b.FirstName + " " + b.LastName)
+				targetChatID = b.ChatID
+				break
+			}
+		}
+
+		if targetUID == "" {
+			if _, err := strconv.ParseInt(cleanID, 10, 64); err == nil {
+				targetUID = cleanID
+				targetUname = cleanID
+				targetName = cleanID
+			} else if uID, uName, err := h.historyRepo.ResolveUserIdentifier(ctx, chatIDStr, cleanID); err == nil && uID != "" {
+				targetUID = uID
+				targetUname = uName
+				targetName = uName
+			}
+		}
+
+		if targetUID == "" && cleanID != "" && h.userbotSender != nil && h.userbotSender.IsAvailable() {
+			if uID, uName, err := h.userbotSender.ResolveUsername(ctx, cleanID); err == nil && uID > 0 {
+				targetUID = fmt.Sprintf("%d", uID)
+				targetUname = cleanID
+				targetName = uName
+			}
+		}
+
+		if targetUID == "" {
+			h.sendMessage(ctx, msg, fmt.Sprintf("mujhe %s naam ka koi blocked user nahi mila yrr, /blocked karke check kar lo na", userIdentifier))
+			return
+		}
+
+		// Execute full unblock & reset
+		if h.blockedRepo != nil {
+			_ = h.blockedRepo.UnblockUser(ctx, targetChatID, targetUID)
+			_ = h.blockedRepo.UnblockUser(ctx, "", targetUID)
+		}
+		if h.abuseRepo != nil {
+			_ = h.abuseRepo.ClearAbuseStrikes(ctx, targetUID)
+		}
+		if h.warningRepo != nil {
+			_ = h.warningRepo.ClearWarnings(ctx, targetChatID, targetUID)
+			_ = h.warningRepo.ClearWarnings(ctx, chatIDStr, targetUID)
+		}
+
+		uidInt, _ := strconv.ParseInt(targetUID, 10, 64)
+		if uidInt != 0 {
+			if h.userbotSender != nil && h.userbotSender.IsAvailable() {
+				_ = h.userbotSender.UnblockUser(ctx, uidInt)
+			}
+			if msg.Chat.ID != 0 && msg.Chat.Type != "private" {
+				_ = h.botClient.UnbanChatMember(ctx, msg.Chat.ID, uidInt, true)
+			}
+		}
+
+		if h.modLogRepo != nil {
+			_ = h.modLogRepo.AddLog(ctx, chatIDStr, targetUID, targetUname, "unblock", "Manual conversational unblock by @Sumit3972", 0, "Sumit3972")
+		}
+
+		dispName := targetName
+		if dispName == "" {
+			dispName = targetUname
+		}
+		if dispName == "" {
+			dispName = targetUID
+		}
+		h.sendMessage(ctx, msg, fmt.Sprintf("haanji done! maine %s ko unblock kar diya hai aur saare strikes reset kar diye hain ✨", dispName))
+
 	case "mute_user", "ban_user", "unmute_user", "unban_user", "warn_user", "clear_warnings", "purge_messages":
 		if isAdmin {
 			h.executeAdminTool(ctx, msg, name, args)

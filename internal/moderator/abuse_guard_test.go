@@ -98,6 +98,17 @@ func (m *mockAbuseRepo) GetAbuseHistory(ctx context.Context, chatID, userID stri
 	return m.records, nil
 }
 
+func (m *mockAbuseRepo) ClearAbuseStrikes(ctx context.Context, userID string) error {
+	var filtered []domain.AbuseRecord
+	for _, r := range m.records {
+		if r.UserID != userID {
+			filtered = append(filtered, r)
+		}
+	}
+	m.records = filtered
+	return nil
+}
+
 type mockBlockedRepo struct {
 	blocked map[string]domain.BlockedUser
 }

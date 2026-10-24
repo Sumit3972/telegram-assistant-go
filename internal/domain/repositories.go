@@ -97,6 +97,7 @@ type AbuseRecordRepository interface {
 	RecordAbuse(ctx context.Context, record *AbuseRecord) error
 	GetActiveAbuseStrikes(ctx context.Context, chatID, userID string, windowDuration time.Duration) (int, error)
 	GetAbuseHistory(ctx context.Context, chatID, userID string, limit int) ([]AbuseRecord, error)
+	ClearAbuseStrikes(ctx context.Context, userID string) error
 }
 
 type UserbotSender interface {
@@ -107,5 +108,6 @@ type UserbotSender interface {
 	SendChatAction(ctx context.Context, chatID int64, action string) error
 	BlockUser(ctx context.Context, userID int64) error
 	UnblockUser(ctx context.Context, userID int64) error
+	ResolveUsername(ctx context.Context, username string) (userID int64, firstName string, err error)
 	IsAvailable() bool
 }

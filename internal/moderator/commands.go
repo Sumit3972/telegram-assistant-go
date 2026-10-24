@@ -14,16 +14,19 @@ import (
 )
 
 type CommandHandler struct {
-	groupRepo   domain.GroupRepository
-	adminRepo   domain.AdminRepository
-	warningRepo domain.WarningRepository
-	modLogRepo  domain.ModerationLogRepository
-	historyRepo domain.HistoryRepository
-	karmaRepo   domain.KarmaRepository
-	shipRepo    domain.ShipRepository
-	aiClient    *ai.Client
-	botClient   *telegram.BotClient
-	botName     string
+	groupRepo     domain.GroupRepository
+	adminRepo     domain.AdminRepository
+	warningRepo   domain.WarningRepository
+	modLogRepo    domain.ModerationLogRepository
+	historyRepo   domain.HistoryRepository
+	karmaRepo     domain.KarmaRepository
+	shipRepo      domain.ShipRepository
+	blockedRepo   domain.BlockedUserRepository
+	abuseRepo     domain.AbuseRecordRepository
+	aiClient      *ai.Client
+	botClient     *telegram.BotClient
+	botName       string
+	userbotSender domain.UserbotSender
 }
 
 func NewCommandHandler(
@@ -34,6 +37,8 @@ func NewCommandHandler(
 	historyRepo domain.HistoryRepository,
 	karmaRepo domain.KarmaRepository,
 	shipRepo domain.ShipRepository,
+	blockedRepo domain.BlockedUserRepository,
+	abuseRepo domain.AbuseRecordRepository,
 	aiClient *ai.Client,
 	botClient *telegram.BotClient,
 	botName ...string,
@@ -50,10 +55,40 @@ func NewCommandHandler(
 		historyRepo: historyRepo,
 		karmaRepo:   karmaRepo,
 		shipRepo:    shipRepo,
+		blockedRepo: blockedRepo,
+		abuseRepo:   abuseRepo,
 		aiClient:    aiClient,
 		botClient:   botClient,
 		botName:     name,
 	}
+}
+
+func (h *CommandHandler) SetUserbotSender(s domain.UserbotSender) {
+	h.userbotSender = s
+}
+
+func (h *CommandHandler) reply(ctx context.Context, msg *domain.TelegramMessage, text string) {
+	if msg.IsUserbot && h.userbotSender != nil && h.userbotSender.IsAvailable() {
+		cleanText := strings.ReplaceAll(text, "<b>", "")
+		cleanText = strings.ReplaceAll(cleanText, "</b>", "")
+		cleanText = strings.ReplaceAll(cleanText, "<i>", "")
+		cleanText = strings.ReplaceAll(cleanText, "</i>", "")
+		cleanText = strings.ReplaceAll(cleanText, "<code>", "`")
+		cleanText = strings.ReplaceAll(cleanText, "</code>", "`")
+		cleanText = strings.ReplaceAll(cleanText, "&lt;", "<")
+		cleanText = strings.ReplaceAll(cleanText, "&gt;", ">")
+		cleanText = strings.ReplaceAll(cleanText, "&amp;", "&")
+
+		err := h.userbotSender.SendMessage(ctx, msg.Chat.ID, cleanText, msg.MessageID)
+		if err == nil {
+			return
+		}
+	}
+
+	_, _ = h.botClient.SendMessage(ctx, msg.Chat.ID, text, telegram.SendMessageOptions{
+		ParseMode: "HTML",
+		ReplyToID: msg.MessageID,
+	})
 }
 
 func (h *CommandHandler) HandleCommand(ctx context.Context, msg *domain.TelegramMessage, isAdmin bool) bool {
@@ -61,11 +96,16 @@ func (h *CommandHandler) HandleCommand(ctx context.Context, msg *domain.Telegram
 	if text == "" {
 		text = strings.TrimSpace(msg.Caption)
 	}
-	if !strings.HasPrefix(text, "/") {
+	if !strings.HasPrefix(text, "/") && !strings.HasPrefix(text, ".") {
 		return false
 	}
 
-	parts := strings.Fields(text)
+	cmdText := text
+	if strings.HasPrefix(cmdText, ".") {
+		cmdText = "/" + strings.TrimPrefix(cmdText, ".")
+	}
+
+	parts := strings.Fields(cmdText)
 	cmd := strings.ToLower(parts[0])
 	cmd = strings.Split(cmd, "@")[0] // strip bot username if present e.g. /warn@bot
 
@@ -233,6 +273,184 @@ func (h *CommandHandler) HandleCommand(ctx context.Context, msg *domain.Telegram
 			_ = h.botClient.UnbanChatMember(ctx, msg.Chat.ID, targetUserID, true)
 			_, _ = h.botClient.SendMessage(ctx, msg.Chat.ID, fmt.Sprintf("✅ <b>%s</b> has been unbanned.", targetUsername), telegram.SendMessageOptions{ParseMode: "HTML", ReplyToID: msg.MessageID})
 		}
+		return true
+
+	case "/blocked", "/blocklist", "/blockedlist":
+		senderUsername := ""
+		if msg.From != nil {
+			senderUsername = msg.From.Username
+		}
+		if !strings.EqualFold(senderUsername, "Sumit3972") {
+			h.reply(ctx, msg, "⛔ <b>Access Denied:</b> This command is strictly reserved for <b>@Sumit3972</b>.")
+			return true
+		}
+
+		blockedList, err := h.blockedRepo.GetBlockedUsers(ctx)
+		if err != nil || len(blockedList) == 0 {
+			h.reply(ctx, msg, "📋 <b>Blocked Users List:</b>\n\n✅ <i>No users are currently blocked!</i>")
+			return true
+		}
+
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("📋 <b>Blocked Users List (%d total):</b>\n\n", len(blockedList)))
+		for i, b := range blockedList {
+			t := time.Unix(b.CreatedAt, 0).Format("02 Jan 15:04 MST")
+			uname := b.Username
+			if uname == "" {
+				uname = "None"
+			} else if !strings.HasPrefix(uname, "@") {
+				uname = "@" + uname
+			}
+			fullName := strings.TrimSpace(b.FirstName + " " + b.LastName)
+			if fullName == "" {
+				fullName = "User"
+			}
+			sb.WriteString(fmt.Sprintf("<b>%d. %s</b> (%s)\n• <b>ID:</b> <code>%s</code> | <b>Strikes:</b> %d\n• <b>Reason:</b> <i>%s</i>\n• <b>Date:</b> %s\n\n",
+				i+1, fullName, uname, b.UserID, b.StrikeCount, b.Reason, t))
+		}
+		sb.WriteString("👉 <i>To unblock:</i> <code>/unblock &lt;username or name or ID&gt;</code>")
+		h.reply(ctx, msg, sb.String())
+		return true
+
+	case "/unblock":
+		senderUsername := ""
+		if msg.From != nil {
+			senderUsername = msg.From.Username
+		}
+		if !strings.EqualFold(senderUsername, "Sumit3972") {
+			h.reply(ctx, msg, "⛔ <b>Access Denied:</b> This command is strictly reserved for <b>@Sumit3972</b>.")
+			return true
+		}
+
+		targetQuery := strings.TrimSpace(strings.Join(args, " "))
+		if targetQuery == "" && (msg.ReplyToMessage == nil || msg.ReplyToMessage.From == nil) {
+			usageText := "ℹ️ <b>Usage:</b> <code>/unblock &lt;username, name, or userID&gt;</code>\n" +
+				"Example: <code>/unblock @Lumi</code> or <code>/unblock Lumi</code> or <code>/unblock 8967976757</code>\n\n" +
+				"<i>Or reply to any message from that user with <code>/unblock</code>.</i>"
+			h.reply(ctx, msg, usageText)
+			return true
+		}
+
+		cleanQuery := strings.TrimPrefix(targetQuery, "@")
+		blockedList, _ := h.blockedRepo.GetBlockedUsers(ctx)
+
+		var targetUID, targetUname, targetName, targetChatID string
+		for _, b := range blockedList {
+			if b.UserID == cleanQuery {
+				targetUID = b.UserID
+				targetUname = b.Username
+				targetName = strings.TrimSpace(b.FirstName + " " + b.LastName)
+				targetChatID = b.ChatID
+				break
+			}
+			if strings.EqualFold(strings.TrimPrefix(b.Username, "@"), cleanQuery) {
+				targetUID = b.UserID
+				targetUname = b.Username
+				targetName = strings.TrimSpace(b.FirstName + " " + b.LastName)
+				targetChatID = b.ChatID
+				break
+			}
+			if strings.EqualFold(b.FirstName, cleanQuery) || strings.EqualFold(strings.TrimSpace(b.FirstName+" "+b.LastName), cleanQuery) {
+				targetUID = b.UserID
+				targetUname = b.Username
+				targetName = strings.TrimSpace(b.FirstName + " " + b.LastName)
+				targetChatID = b.ChatID
+				break
+			}
+		}
+
+		if targetUID == "" && msg.ReplyToMessage != nil && msg.ReplyToMessage.From != nil {
+			targetUID = fmt.Sprintf("%d", msg.ReplyToMessage.From.ID)
+			targetUname = msg.ReplyToMessage.From.Username
+			targetName = msg.ReplyToMessage.From.FirstName
+		}
+
+		if targetUID == "" && cleanQuery != "" {
+			if _, err := strconv.ParseInt(cleanQuery, 10, 64); err == nil {
+				targetUID = cleanQuery
+				targetUname = cleanQuery
+				targetName = cleanQuery
+			} else {
+				if uID, uName, err := h.historyRepo.ResolveUserIdentifier(ctx, chatIDStr, cleanQuery); err == nil && uID != "" {
+					targetUID = uID
+					targetUname = uName
+					targetName = uName
+				}
+			}
+		}
+
+		if targetUID == "" && cleanQuery != "" && h.userbotSender != nil && h.userbotSender.IsAvailable() {
+			if uID, uName, err := h.userbotSender.ResolveUsername(ctx, cleanQuery); err == nil && uID > 0 {
+				targetUID = fmt.Sprintf("%d", uID)
+				targetUname = cleanQuery
+				targetName = uName
+			}
+		}
+
+		if targetUID == "" {
+			h.reply(ctx, msg, fmt.Sprintf("⚠️ No user found matching <code>%s</code>.\nUse <code>/blocked</code> to view the list of currently blocked users.", targetQuery))
+			return true
+		}
+
+		// 1. Remove from blocked_users database table
+		if h.blockedRepo != nil {
+			_ = h.blockedRepo.UnblockUser(ctx, targetChatID, targetUID)
+			_ = h.blockedRepo.UnblockUser(ctx, "", targetUID)
+		}
+
+		// 2. Clear abuse strikes from abuse_records table
+		if h.abuseRepo != nil {
+			_ = h.abuseRepo.ClearAbuseStrikes(ctx, targetUID)
+		}
+
+		// 3. Clear warnings from warnings table
+		if h.warningRepo != nil {
+			_ = h.warningRepo.ClearWarnings(ctx, targetChatID, targetUID)
+			_ = h.warningRepo.ClearWarnings(ctx, chatIDStr, targetUID)
+		}
+
+		// 4. Native Telegram Unblock
+		uidInt, _ := strconv.ParseInt(targetUID, 10, 64)
+		if uidInt != 0 {
+			// MTProto Userbot ContactsUnblock
+			if h.userbotSender != nil && h.userbotSender.IsAvailable() {
+				_ = h.userbotSender.UnblockUser(ctx, uidInt)
+			}
+			// Bot API Unban in group if applicable
+			if msg.Chat.ID != 0 && msg.Chat.Type != "private" {
+				_ = h.botClient.UnbanChatMember(ctx, msg.Chat.ID, uidInt, true)
+			}
+			if cidInt, err := strconv.ParseInt(targetChatID, 10, 64); err == nil && cidInt != 0 {
+				_ = h.botClient.UnbanChatMember(ctx, cidInt, uidInt, true)
+			}
+		}
+
+		// 5. Audit Log
+		if h.modLogRepo != nil {
+			_ = h.modLogRepo.AddLog(ctx, chatIDStr, targetUID, targetUname, "unblock", "Manual unblock by @Sumit3972", 0, "Sumit3972")
+		}
+
+		if targetName == "" {
+			targetName = targetUID
+		}
+		if targetUname == "" {
+			targetUname = "None"
+		} else if !strings.HasPrefix(targetUname, "@") {
+			targetUname = "@" + targetUname
+		}
+
+		successMsg := fmt.Sprintf(`✅ <b>User Successfully Unblocked!</b>
+
+👤 <b>User:</b> %s (%s)
+🆔 <b>User ID:</b> <code>%s</code>
+
+🔄 <b>Limits & Access Restored:</b>
+• Removed from blocked users blacklist
+• Abuse strikes reset to 0
+• Warnings count reset to 0/3
+• Unblocked on Telegram MTProto & Group`, targetName, targetUname, targetUID)
+
+		h.reply(ctx, msg, successMsg)
 		return true
 
 	case "/purge", "/del":
