@@ -106,5 +106,6 @@ type UserbotSender interface {
 	SetReaction(ctx context.Context, chatID int64, msgID int, emoji string) error
 	SendChatAction(ctx context.Context, chatID int64, action string) error
 	BlockUser(ctx context.Context, userID int64) error
+	UnblockUser(ctx context.Context, userID int64) error
 	IsAvailable() bool
 }

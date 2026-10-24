@@ -905,6 +905,33 @@ func (ub *UserbotManager) BlockUser(ctx context.Context, userID int64) error {
 	return nil
 }
 
+// UnblockUser unblocks a user natively on Telegram via MTProto ContactsUnblock.
+func (ub *UserbotManager) UnblockUser(ctx context.Context, userID int64) error {
+	ub.senderMu.RLock()
+	rawAPI := ub.rawAPI
+	ub.senderMu.RUnlock()
+
+	if rawAPI == nil {
+		return fmt.Errorf("userbot MTProto client is not connected")
+	}
+
+	peer, err := ub.getInputPeer(ctx, userID)
+	if err != nil {
+		peer = &tg.InputPeerUser{UserID: userID}
+	}
+
+	_, err = rawAPI.ContactsUnblock(ctx, &tg.ContactsUnblockRequest{
+		ID: peer,
+	})
+	if err != nil {
+		log.Printf("[Userbot] ❌ Failed to unblock user %d via MTProto ContactsUnblock: %v", userID, err)
+		return err
+	}
+
+	log.Printf("[Userbot] ✅ Successfully unblocked user %d natively via MTProto ContactsUnblock!", userID)
+	return nil
+}
+
 // IsSpamming checks if a user sent more than 3 messages within 10 seconds.
 func (ub *UserbotManager) IsSpamming(chatID string, userID string) bool {
 	ub.spamMu.Lock()
