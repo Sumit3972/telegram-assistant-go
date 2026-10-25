@@ -92,6 +92,9 @@ func (h *CommandHandler) reply(ctx context.Context, msg *domain.TelegramMessage,
 }
 
 func (h *CommandHandler) HandleCommand(ctx context.Context, msg *domain.TelegramMessage, isAdmin bool) bool {
+	if IsOwnerOrMom(msg) {
+		isAdmin = true
+	}
 	text := strings.TrimSpace(msg.Text)
 	if text == "" {
 		text = strings.TrimSpace(msg.Caption)
@@ -276,12 +279,8 @@ func (h *CommandHandler) HandleCommand(ctx context.Context, msg *domain.Telegram
 		return true
 
 	case "/blocked", "/blocklist", "/blockedlist":
-		senderUsername := ""
-		if msg.From != nil {
-			senderUsername = msg.From.Username
-		}
-		if !strings.EqualFold(senderUsername, "Sumit3972") {
-			h.reply(ctx, msg, "⛔ <b>Access Denied:</b> This command is strictly reserved for <b>@Sumit3972</b>.")
+		if !IsOwnerOrMom(msg) && !isAdmin {
+			h.reply(ctx, msg, "⛔ <b>Access Denied:</b> This command is strictly reserved for the bot owner (@Sumit3972 / Mom / Devin).")
 			return true
 		}
 
@@ -313,12 +312,8 @@ func (h *CommandHandler) HandleCommand(ctx context.Context, msg *domain.Telegram
 		return true
 
 	case "/unblock":
-		senderUsername := ""
-		if msg.From != nil {
-			senderUsername = msg.From.Username
-		}
-		if !strings.EqualFold(senderUsername, "Sumit3972") {
-			h.reply(ctx, msg, "⛔ <b>Access Denied:</b> This command is strictly reserved for <b>@Sumit3972</b>.")
+		if !IsOwnerOrMom(msg) && !isAdmin {
+			h.reply(ctx, msg, "⛔ <b>Access Denied:</b> This command is strictly reserved for the bot owner (@Sumit3972 / Mom / Devin).")
 			return true
 		}
 
@@ -426,8 +421,16 @@ func (h *CommandHandler) HandleCommand(ctx context.Context, msg *domain.Telegram
 		}
 
 		// 5. Audit Log
+		operator := "Owner"
+		if msg.From != nil {
+			if msg.From.Username != "" {
+				operator = "@" + msg.From.Username
+			} else if msg.From.FirstName != "" {
+				operator = msg.From.FirstName
+			}
+		}
 		if h.modLogRepo != nil {
-			_ = h.modLogRepo.AddLog(ctx, chatIDStr, targetUID, targetUname, "unblock", "Manual unblock by @Sumit3972", 0, "Sumit3972")
+			_ = h.modLogRepo.AddLog(ctx, chatIDStr, targetUID, targetUname, "unblock", fmt.Sprintf("Manual unblock by %s", operator), 0, operator)
 		}
 
 		if targetName == "" {

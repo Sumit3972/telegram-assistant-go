@@ -103,7 +103,7 @@ func GetConversationTools() []domain.ToolDefinition {
 			Type: "function",
 			Function: domain.ToolFunctionDefinition{
 				Name:        "unblock_user",
-				Description: "Unblocks a user on Telegram and resets all their strikes and warning limits back to zero. ONLY allowed when requested by owner @Sumit3972.",
+				Description: "Unblocks a user on Telegram and resets all their strikes and warning limits back to zero. ONLY allowed when requested by owner (@Sumit3972, Mom, Devin).",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{

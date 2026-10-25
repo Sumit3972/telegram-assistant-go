@@ -184,6 +184,9 @@ func (h *ConversationHandler) EnqueueConversation(ctx context.Context, msg *doma
 	if msg == nil || msg.From == nil {
 		return
 	}
+	if IsOwnerOrMom(msg) {
+		isAdmin = true
+	}
 	// Drop Telegram official service messages (ID 777000 or username Telegram)
 	if msg.Chat.ID == 777000 || msg.From.ID == 777000 || strings.EqualFold(msg.From.Username, "Telegram") {
 		return
@@ -464,7 +467,11 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 	}
 
 	relationshipTier := "stranger"
-	if len(recent) <= 1 || affectionScore < 25 {
+	if IsOwnerOrMom(msg) {
+		relationshipTier = "deeply_bonded"
+		intimacyLevel = 5
+		affectionScore = 100
+	} else if len(recent) <= 1 || affectionScore < 25 {
 		relationshipTier = "stranger"
 		intimacyLevel = 1
 	} else if affectionScore >= 85 {
@@ -512,6 +519,9 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 
 	// 3b. Dynamic Abuse Evaluation via OpenJev (Zero Hardcoding)
 	isAbuse, _, maxStrikes, abuseReason := EvaluateAbuseFromDecision(pre)
+	if IsOwnerOrMom(msg) {
+		isAbuse = false // Never abuse-strike or block owner/Mom/Devin/Sumit
+	}
 	if isAbuse {
 		log.Printf("[Conversation] 🚨 Abuse detected via OpenJev: severity=%s, maxStrikes=%d, reason=%s", pre.AbuseSeverity, maxStrikes, abuseReason)
 		// Strict media & location lockdown: No selfies, photos, or voice notes for abusers!
@@ -572,7 +582,7 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 	}
 
 	if isPhotoReq {
-		if relationshipTier == "stranger" {
+		if relationshipTier == "stranger" && !IsOwnerOrMom(msg) {
 			log.Printf("[Conversation] 🚫 User %s is a stranger (tier: %s, affection: %d). Politely declining photo request.", userIDStr, relationshipTier, affectionScore)
 			refusal, _ := h.generateDynamicDialogue(ctx, "The user asked for your photo, but you two are complete strangers and just started talking. Playfully decline, saying you don't send pictures to strangers without knowing them first.", text, "stranger", displayUser)
 			h.sendMessage(ctx, msg, refusal)
@@ -1340,6 +1350,9 @@ func (h *ConversationHandler) runToolCall(
 		return "Message forwarded to group administrator."
 
 	case "block_user":
+		if IsOwnerOrMom(msg) {
+			return "Cannot block owner or authorized administrator."
+		}
 		reason, _ := args["reason"].(string)
 		partingMessage, _ := args["parting_message"].(string)
 		if partingMessage == "" {
@@ -1395,13 +1408,9 @@ func (h *ConversationHandler) runToolCall(
 		return "User permanently blocked."
 
 	case "unblock_user":
-		senderUname := ""
-		if msg.From != nil {
-			senderUname = msg.From.Username
-		}
-		if !strings.EqualFold(senderUname, "Sumit3972") {
-			h.sendMessage(ctx, msg, "arre ye permission sirf @Sumit3972 ke paas hai haha, main kisi aur ke kehne pe unblock nahi karti 😉")
-			return "Permission denied: only @Sumit3972 can unblock."
+		if !IsOwnerOrMom(msg) && !isAdmin {
+			h.sendMessage(ctx, msg, "arre ye permission sirf owner / Mom / Devin / Sumit ke paas hai haha, main kisi aur ke kehne pe unblock nahi karti 😉")
+			return "Permission denied: only owner/authorized admin can unblock."
 		}
 
 		userIdentifier, _ := args["user_identifier"].(string)
@@ -1470,8 +1479,16 @@ func (h *ConversationHandler) runToolCall(
 			}
 		}
 
+		operator := "Owner"
+		if msg.From != nil {
+			if msg.From.Username != "" {
+				operator = "@" + msg.From.Username
+			} else if msg.From.FirstName != "" {
+				operator = msg.From.FirstName
+			}
+		}
 		if h.modLogRepo != nil {
-			_ = h.modLogRepo.AddLog(ctx, chatIDStr, targetUID, targetUname, "unblock", "Manual conversational unblock by @Sumit3972", 0, "Sumit3972")
+			_ = h.modLogRepo.AddLog(ctx, chatIDStr, targetUID, targetUname, "unblock", fmt.Sprintf("Conversational unblock by %s", operator), 0, operator)
 		}
 
 		dispName := targetName
@@ -1485,7 +1502,7 @@ func (h *ConversationHandler) runToolCall(
 		return fmt.Sprintf("User %s unblocked successfully.", dispName)
 
 	case "mute_user", "ban_user", "unmute_user", "unban_user", "warn_user", "clear_warnings", "purge_messages":
-		if isAdmin {
+		if isAdmin || IsOwnerOrMom(msg) {
 			h.executeAdminTool(ctx, msg, name, args)
 			return fmt.Sprintf("Admin action %s executed.", name)
 		}

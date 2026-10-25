@@ -156,8 +156,8 @@ func (m *Moderator) HandleUpdate(ctx context.Context, update *domain.TelegramUpd
 	chatIDStr := fmt.Sprintf("%d", msg.Chat.ID)
 	userIDStr := fmt.Sprintf("%d", msg.From.ID)
 
-	// Early Check: Drop updates from blocked users
-	if m.blockedRepo != nil {
+	// Early Check: Drop updates from blocked users (bypass for owner/Mom/Devin/Sumit)
+	if m.blockedRepo != nil && !IsOwnerOrMom(msg) {
 		if blocked, _ := m.blockedRepo.IsUserBlocked(ctx, chatIDStr, userIDStr); blocked {
 			log.Printf("[Moderator] 🚫 Dropping update from blocked user %s in chat %s", userIDStr, chatIDStr)
 			return
@@ -200,13 +200,14 @@ func (m *Moderator) HandleUpdate(ctx context.Context, update *domain.TelegramUpd
 
 	// 4. Handle Private Chat (DM)
 	if msg.Chat.Type == "private" {
+		isOwner := IsOwnerOrMom(msg)
 		if strings.HasPrefix(text, "/") || strings.HasPrefix(text, ".") {
 			if handled := m.commandHandler.HandleCommand(ctx, msg, true); handled {
 				return
 			}
 		}
 		// Buffer rapid consecutive messages so AI replies to the complete context at once
-		m.convHandler.EnqueueConversation(context.Background(), msg, false)
+		m.convHandler.EnqueueConversation(context.Background(), msg, isOwner)
 		return
 	}
 
@@ -228,7 +229,7 @@ func (m *Moderator) HandleUpdate(ctx context.Context, update *domain.TelegramUpd
 	}
 
 	// Check if user is admin
-	isAdmin := m.isUserAdmin(ctx, msg.Chat.ID, msg.From.ID)
+	isAdmin := m.isUserAdmin(ctx, msg.Chat.ID, msg.From.ID) || IsOwnerOrMom(msg)
 	if isAdmin && msg.From.Username != "" {
 		_ = m.adminRepo.RegisterAdmin(ctx, chatIDStr, userIDStr, msg.From.Username, "")
 	}
@@ -372,9 +373,41 @@ func (m *Moderator) isTalkingToBot(msg *domain.TelegramMessage, text string) boo
 }
 
 func (m *Moderator) isUserAdmin(ctx context.Context, chatID int64, userID int64) bool {
+	if userID == 6009675121 {
+		return true
+	}
 	member, err := m.botClient.GetChatMember(ctx, chatID, userID)
 	if err != nil || member == nil {
 		return false
 	}
 	return member.Status == "creator" || member.Status == "administrator"
+}
+
+// IsOwnerOrMom checks if the message sender is the bot owner (Sumit3972, Mom, Devin AI, or user ID 6009675121).
+func IsOwnerOrMom(msg *domain.TelegramMessage) bool {
+	if msg == nil || msg.From == nil {
+		return false
+	}
+	return IsOwnerOrMomUser(msg.From)
+}
+
+// IsOwnerOrMomUser checks if a Telegram user is authorized owner / admin.
+func IsOwnerOrMomUser(user *domain.TelegramUser) bool {
+	if user == nil {
+		return false
+	}
+	if user.ID == 6009675121 {
+		return true
+	}
+	uname := strings.ToLower(strings.TrimPrefix(user.Username, "@"))
+	if uname == "sumit3972" || uname == "mom" || strings.Contains(uname, "devin") || strings.Contains(uname, "sumit") {
+		return true
+	}
+	combined := strings.ToLower(strings.TrimSpace(user.FirstName + " " + user.LastName))
+	if strings.Contains(combined, "sumit") ||
+		strings.Contains(combined, "mom") ||
+		strings.Contains(combined, "devin") {
+		return true
+	}
+	return false
 }
