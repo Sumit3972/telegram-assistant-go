@@ -332,6 +332,9 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 	if msg == nil || msg.Chat.ID == 0 {
 		return
 	}
+	if IsOwnerOrMom(msg) {
+		isAdmin = true
+	}
 	// Drop Telegram official service messages (ID 777000 or username Telegram)
 	if msg.Chat.ID == 777000 || (msg.From != nil && (msg.From.ID == 777000 || strings.EqualFold(msg.From.Username, "Telegram"))) {
 		log.Printf("[Conversation] Dropping Telegram official service notification (ID: %d)", msg.Chat.ID)
@@ -364,10 +367,102 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 	chatIDStr := fmt.Sprintf("%d", msg.Chat.ID)
 	userIDStr := fmt.Sprintf("%d", msg.From.ID)
 
-	// Early Check: Ignore messages from blocked users
-	if h.blockedRepo != nil {
+	// Early Check: Ignore messages from blocked users (bypass for owner)
+	if h.blockedRepo != nil && !IsOwnerOrMom(msg) {
 		if blocked, _ := h.blockedRepo.IsUserBlocked(ctx, chatIDStr, userIDStr); blocked {
 			log.Printf("[Conversation] 🚫 User %s is permanently blocked in %s. Dropping message.", userIDStr, chatIDStr)
+			return
+		}
+	}
+
+	// 0c. Conversational unblock / unban shortcut for Owner/Mom/Devin/Sumit
+	lowerT := strings.ToLower(text)
+	if IsOwnerOrMom(msg) && (strings.Contains(lowerT, "unblock") || strings.Contains(lowerT, "unban")) {
+		log.Printf("[Conversation] 🔑 Conversational unblock/unban request detected from owner: %q", text)
+		blockedList, _ := h.blockedRepo.GetBlockedUsers(ctx)
+		var matchedBlocked *domain.BlockedUser
+		for i := range blockedList {
+			b := &blockedList[i]
+			if b.UserID != "" && strings.Contains(text, b.UserID) {
+				matchedBlocked = b
+				break
+			}
+			cleanUname := strings.ToLower(strings.TrimPrefix(b.Username, "@"))
+			if cleanUname != "" && strings.Contains(lowerT, cleanUname) {
+				matchedBlocked = b
+				break
+			}
+			if b.FirstName != "" && strings.Contains(lowerT, strings.ToLower(b.FirstName)) {
+				matchedBlocked = b
+				break
+			}
+		}
+
+		targetID := ""
+		targetName := ""
+		targetChatID := ""
+		if matchedBlocked != nil {
+			targetID = matchedBlocked.UserID
+			targetName = matchedBlocked.FirstName
+			if targetName == "" {
+				targetName = matchedBlocked.Username
+			}
+			targetChatID = matchedBlocked.ChatID
+		} else {
+			reDigits := regexp.MustCompile(`\b\d{7,12}\b`)
+			if m := reDigits.FindString(text); m != "" {
+				targetID = m
+				targetName = m
+			} else {
+				reAt := regexp.MustCompile(`@([A-Za-z0-9_]{4,32})`)
+				if m := reAt.FindStringSubmatch(text); len(m) > 1 {
+					cleanQuery := m[1]
+					if uID, uName, err := h.historyRepo.ResolveUserIdentifier(ctx, chatIDStr, cleanQuery); err == nil && uID != "" {
+						targetID = uID
+						targetName = uName
+					} else if h.userbotSender != nil && h.userbotSender.IsAvailable() {
+						if uID, uName, err := h.userbotSender.ResolveUsername(ctx, cleanQuery); err == nil && uID > 0 {
+							targetID = fmt.Sprintf("%d", uID)
+							targetName = uName
+						}
+					}
+				}
+			}
+		}
+
+		if targetID != "" {
+			if h.blockedRepo != nil {
+				_ = h.blockedRepo.UnblockUser(ctx, targetChatID, targetID)
+				_ = h.blockedRepo.UnblockUser(ctx, "", targetID)
+			}
+			if h.abuseRepo != nil {
+				_ = h.abuseRepo.ClearAbuseStrikes(ctx, targetID)
+			}
+			if h.warningRepo != nil {
+				_ = h.warningRepo.ClearWarnings(ctx, targetChatID, targetID)
+				_ = h.warningRepo.ClearWarnings(ctx, chatIDStr, targetID)
+			}
+			uidInt, _ := strconv.ParseInt(targetID, 10, 64)
+			if uidInt != 0 {
+				if h.userbotSender != nil && h.userbotSender.IsAvailable() {
+					_ = h.userbotSender.UnblockUser(ctx, uidInt)
+				}
+				if msg.Chat.ID != 0 && msg.Chat.Type != "private" {
+					_ = h.botClient.UnbanChatMember(ctx, msg.Chat.ID, uidInt, true)
+				}
+				if cidInt, err := strconv.ParseInt(targetChatID, 10, 64); err == nil && cidInt != 0 {
+					_ = h.botClient.UnbanChatMember(ctx, cidInt, uidInt, true)
+				}
+			}
+			if h.modLogRepo != nil {
+				_ = h.modLogRepo.AddLog(ctx, chatIDStr, targetID, targetName, "unblock", "Conversational unblock by Owner", 0, "Owner")
+			}
+
+			disp := targetName
+			if disp == "" {
+				disp = targetID
+			}
+			h.sendMessage(ctx, msg, fmt.Sprintf("haanji done! maine %s (ID: %s) ko unblock aur unban kar diya hai, saare strikes reset ho gaye hain ✨", disp, targetID))
 			return
 		}
 	}
@@ -437,9 +532,9 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 	pre := h.decisionClient.PreDecision(ctx, text, historyContext, displayUser)
 
 	intent := pre.Intent
-	// Chavi always retaliates against abusers with raw street curses; never stays silent!
+	// Chavi always replies in private chat or to owner; retaliates against abusers
 	shouldReply := pre.ShouldReply
-	if intent == "rude_abuse" {
+	if intent == "rude_abuse" || msg.Chat.Type == "private" || IsOwnerOrMom(msg) {
 		shouldReply = true
 	}
 	if !shouldReply {
