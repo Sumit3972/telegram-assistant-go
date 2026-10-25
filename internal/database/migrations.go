@@ -102,7 +102,7 @@ func AutoMigrate(ctx context.Context, pool *pgxpool.Pool) error {
 			chat_id TEXT,
 			user_id TEXT,
 			username TEXT,
-			affection_score INTEGER DEFAULT 50,
+			affection_score INTEGER DEFAULT 15,
 			last_interaction BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT,
 			PRIMARY KEY (chat_id, user_id)
 		);`,
@@ -134,6 +134,8 @@ func AutoMigrate(ctx context.Context, pool *pgxpool.Pool) error {
 			UNIQUE(provider, api_key)
 		);`,
 		`ALTER TABLE relationships ADD COLUMN IF NOT EXISTS intimacy_level INTEGER DEFAULT 1;`,
+		`ALTER TABLE relationships ALTER COLUMN affection_score SET DEFAULT 15;`,
+		`ALTER TABLE relationships ALTER COLUMN intimacy_level SET DEFAULT 1;`,
 		`ALTER TABLE relationships ADD COLUMN IF NOT EXISTS current_outfit TEXT DEFAULT '';`,
 		`ALTER TABLE relationships ADD COLUMN IF NOT EXISTS outfit_updated_at BIGINT DEFAULT 0;`,
 		`ALTER TABLE relationships ADD COLUMN IF NOT EXISTS first_name TEXT DEFAULT '';`,

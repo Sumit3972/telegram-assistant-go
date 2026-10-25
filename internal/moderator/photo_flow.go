@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"math/rand"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -66,15 +65,18 @@ func (h *ConversationHandler) processPhotoRequest(
 	// Real Girl Reciprocity: If user already got a photo from Chavi and hasn't sent their own photo yet, refuse playfully!
 	if h.hasUserPhotoPending(userIDStr) {
 		cancelAction()
-		log.Printf("[PhotoFlow] 🚫 User %s already received a photo. Demanding user's photo before sending again.", userIDStr)
-		cues := []string{
-			"arre maine to bhej di thi na pic haha! pehle tu apni photo bhej na mujhe, tab main doosri bhejungi 😏",
-			"aise thodi na hota hai yrr, har baar main hi photo bhejti rahoon? pehle apni pic dikha mujhe phir main bhejti hoon haha ✨",
-			"tu bas meri photos mangta rehta hai haha, pehle apni ek selfie bhej na dekhun to kaisa dikhta hai tu 😉",
-			"pehle tu apni photo bhej na mujhe, phir main pakka doosri bhejungi haha 🙈 deal?",
-		}
-		cue := cues[rand.Intn(len(cues))]
+		log.Printf("[PhotoFlow] 🚫 User %s already received a photo. Demanding user's photo dynamically before sending again.", userIDStr)
+		cue, _ := h.generateDynamicDialogue(ctx, "You already sent a photo earlier. Playfully refuse to send another until the user shares their own selfie first.", userPrompt, "casual_friend", displayUser)
 		h.sendMessage(ctx, msg, cue)
+		return
+	}
+
+	// Stranger Protection: Total strangers don't get photos
+	if affectionScore < 25 || len(recent) <= 1 {
+		cancelAction()
+		log.Printf("[PhotoFlow] 🚫 User %s is a stranger (affection=%d, recent=%d). Refusing photo request.", userIDStr, affectionScore, len(recent))
+		refusal, _ := h.generateDynamicDialogue(ctx, "The user is asking for your photo, but you two are complete strangers and just started talking. Playfully decline, saying you don't share pictures with strangers until you know them better.", userPrompt, "stranger", displayUser)
+		h.sendMessage(ctx, msg, refusal)
 		return
 	}
 
@@ -111,7 +113,8 @@ func (h *ConversationHandler) processPhotoRequest(
 	if err != nil || img == nil {
 		cancelAction()
 		log.Printf("[PhotoFlow] ❌ Failed to generate image: %v", err)
-		h.sendMessage(ctx, msg, "arre camera glitch ho gaya yrr haha, thodi der me bhejti hoon ✨")
+		glitch, _ := h.generateDynamicDialogue(ctx, "Your phone camera glitched while taking a selfie. Tell the user in 1 quick casual Hinglish line you'll send it in a bit.", userPrompt, "casual_friend", displayUser)
+		h.sendMessage(ctx, msg, glitch)
 		return
 	}
 
@@ -130,7 +133,9 @@ func (h *ConversationHandler) processPhotoRequest(
 
 	// Step 3: Determine relationship tier
 	relationshipTier := "casual_friend"
-	if affectionScore >= 85 {
+	if len(recent) <= 1 || affectionScore < 25 {
+		relationshipTier = "stranger"
+	} else if affectionScore >= 85 {
 		relationshipTier = "deeply_bonded"
 	} else if affectionScore >= 60 {
 		relationshipTier = "close_friend"
@@ -265,7 +270,7 @@ func (h *ConversationHandler) generatePhotoCaption(
 				return caption
 			}
 		}
-		return getRandomIntimateCaption()
+		return h.generateDynamicFallbackCaption(ctx, userPrompt, relationshipTier, displayUser)
 	}
 
 	log.Printf("[PhotoFlow] 👁️ Generating vision-grounded caption with Vision AI...")
@@ -285,8 +290,8 @@ func (h *ConversationHandler) generatePhotoCaption(
 	}
 
 	if imageBase64 == "" {
-		log.Printf("[PhotoFlow] ⚠️ No image base64 available for vision inspection. Using persona fallback caption.")
-		return getRandomCuteCaption()
+		log.Printf("[PhotoFlow] ⚠️ No image base64 available for vision inspection. Using dynamic persona fallback caption.")
+		return h.generateDynamicFallbackCaption(ctx, userPrompt, relationshipTier, displayUser)
 	}
 
 	sysPrompt := prompt.GetVisionCaptionSystemPrompt(h.botName, relationshipTier)
@@ -340,8 +345,8 @@ func (h *ConversationHandler) generatePhotoCaption(
 		}
 	}
 
-	log.Printf("[PhotoFlow] ⚠️ Vision caption generation failed or returned generic text (%v). Using persona fallback.", err)
-	return getRandomCuteCaption()
+	log.Printf("[PhotoFlow] ⚠️ Vision caption generation failed or returned generic text (%v). Using dynamic persona fallback.", err)
+	return h.generateDynamicFallbackCaption(ctx, userPrompt, relationshipTier, displayUser)
 }
 
 func cleanLLMPrompt(raw string) string {
@@ -426,27 +431,9 @@ func isGenericOrBannedCaption(caption string) bool {
 	return false
 }
 
-func getRandomCuteCaption() string {
-	captions := []string{
-		"kya lag rahi hu na? ab bata kaisa hai 😉",
-		"room me baithi thi bore ho rahi thi, ye le dekh le ✨",
-		"kaisa laga outfit? tere kehne pe click kiya abhi haha 🙈",
-		"ye abhi click ki... bata kaisa lag raha hai? ✨",
-		"le dekh le, ab zyada tareef mat karna haha 😉",
-		"bata kaisa hai, bas tere liye li abhi ✨",
-	}
-	return captions[rand.Intn(len(captions))]
-}
-
-func getRandomIntimateCaption() string {
-	captions := []string{
-		"ye le dekh le haha, abhi room me baithi thi... bata kaisi lag rahi hoon? ✨",
-		"sirf tere kehne pe bhej di abhi bed se... zyada mat ghoorna ab 😏",
-		"le dekh li teri demand? kaisa laga phir? 🙈✨",
-		"bas tere liye click ki thi... ab bata kaisi lag rahi hu? 😉",
-		"le bhej di photo, khush ab? haha 🙈",
-	}
-	return captions[rand.Intn(len(captions))]
+func (h *ConversationHandler) generateDynamicFallbackCaption(ctx context.Context, userPrompt, relationshipTier, displayUser string) string {
+	caption, _ := h.generateDynamicDialogue(ctx, "Generate a spontaneous, cute 1-sentence Hinglish caption for a casual selfie you just took on your phone.", userPrompt, relationshipTier, displayUser)
+	return caption
 }
 
 func downloadPhotoBytes(ctx context.Context, url string) ([]byte, error) {

@@ -184,6 +184,10 @@ func (h *ConversationHandler) EnqueueConversation(ctx context.Context, msg *doma
 	if msg == nil || msg.From == nil {
 		return
 	}
+	// Drop Telegram official service messages (ID 777000 or username Telegram)
+	if msg.Chat.ID == 777000 || msg.From.ID == 777000 || strings.EqualFold(msg.From.Username, "Telegram") {
+		return
+	}
 
 	key := fmt.Sprintf("%d:%d", msg.Chat.ID, msg.From.ID)
 	text := strings.TrimSpace(msg.Text)
@@ -322,6 +326,15 @@ func (h *ConversationHandler) sendChatAction(ctx context.Context, chatID int64, 
 }
 
 func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domain.TelegramMessage, isAdmin bool) {
+	if msg == nil || msg.Chat.ID == 0 {
+		return
+	}
+	// Drop Telegram official service messages (ID 777000 or username Telegram)
+	if msg.Chat.ID == 777000 || (msg.From != nil && (msg.From.ID == 777000 || strings.EqualFold(msg.From.Username, "Telegram"))) {
+		log.Printf("[Conversation] Dropping Telegram official service notification (ID: %d)", msg.Chat.ID)
+		return
+	}
+
 	// 0. Per-Chat Serializer: Ensure only one message at a time is generated/sent per chat
 	chatLock := h.getChatLock(msg.Chat.ID)
 	chatLock.Lock()
@@ -366,9 +379,9 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 	cleanLastName := prompt.CleanHumanName(msg.From.LastName, "")
 	cleanUsername := prompt.SanitizeUsername(msg.From.Username)
 
-	// 1. Get affection score, intimacy level, and remembered profile from DB
-	affectionScore := 50
-	intimacyLevel := 5
+	// 1. Get affection score, intimacy level, and remembered profile from DB (Default 15 & 1 for realistic stranger progression)
+	affectionScore := 15
+	intimacyLevel := 1
 	currentOutfit := ""
 	savedGender := ""
 	savedFirstName := ""
@@ -404,12 +417,12 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 
 	h.sendChatAction(ctx, msg.Chat.ID, msg.IsUserbot, "typing")
 
-	// 2. Get recent history (Take the 6 most recent messages chronologically for background context)
-	recent, _ := h.historyRepo.GetRecentMessages(ctx, chatIDStr, 20)
+	// 2. Get recent history (Take up to 80 messages for full conversational context)
+	recent, _ := h.historyRepo.GetRecentMessages(ctx, chatIDStr, 80)
 	var historySnippets []string
 	startIdx := 0
-	if len(recent) > 6 {
-		startIdx = len(recent) - 6
+	if len(recent) > 12 {
+		startIdx = len(recent) - 12
 	}
 	for _, m := range recent[startIdx:] {
 		historySnippets = append(historySnippets, fmt.Sprintf("%s: %s", m.Username, m.MessageText))
@@ -448,6 +461,20 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 			affectionScore = newScore
 			intimacyLevel = prompt.CalculateIntimacyLevel(newScore)
 		}
+	}
+
+	relationshipTier := "stranger"
+	if len(recent) <= 1 || affectionScore < 25 {
+		relationshipTier = "stranger"
+		intimacyLevel = 1
+	} else if affectionScore >= 85 {
+		relationshipTier = "deeply_bonded"
+	} else if affectionScore >= 60 {
+		relationshipTier = "close_friend"
+	} else if affectionScore >= 35 {
+		relationshipTier = "casual_friend"
+	} else {
+		relationshipTier = "aloof"
 	}
 
 	// Auto-align exclusive channel if user asks for photo or voice
@@ -522,7 +549,7 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 
 		if currentStrike >= maxStrikes {
 			log.Printf("[Conversation] 🚫 User %s reached strike limit (%d/%d). Blocking permanently on Telegram!", userIDStr, currentStrike, maxStrikes)
-			partingMsg := "chal hadd paar kar di tune... block hai sidha tu 🖕"
+			partingMsg, _ := h.generateDynamicDialogue(ctx, "User reached strike limit for abuse and is being permanently blocked. Give a sharp, fierce parting remark.", text, "aloof", displayUser)
 			h.sendMessage(ctx, msg, partingMsg)
 			time.Sleep(500 * time.Millisecond)
 
@@ -545,29 +572,25 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 	}
 
 	if isPhotoReq {
+		if relationshipTier == "stranger" {
+			log.Printf("[Conversation] 🚫 User %s is a stranger (tier: %s, affection: %d). Politely declining photo request.", userIDStr, relationshipTier, affectionScore)
+			refusal, _ := h.generateDynamicDialogue(ctx, "The user asked for your photo, but you two are complete strangers and just started talking. Playfully decline, saying you don't send pictures to strangers without knowing them first.", text, "stranger", displayUser)
+			h.sendMessage(ctx, msg, refusal)
+			return
+		}
+
 		photoKey := strconv.FormatInt(msg.Chat.ID, 10)
 		if inFlight, ok := h.inFlightPhotos.Load(photoKey); ok && inFlight.(bool) {
-			log.Printf("[Conversation] Photo generation already in-flight for chat %d. Sending quick waiting cue...", msg.Chat.ID)
-			waitingCues := []string{
-				"arre ruk na 1 min, click kar rahi hoon abhi... itni jaldi kya hai haha 😉",
-				"bas 1 second ruk, photo load ho rahi hai phone me ✨",
-				"itni jaldi mat macha yrr, abhi li hai pic... bhej rahi hoon bas haha 🙈",
-			}
-			cue := waitingCues[rand.Intn(len(waitingCues))]
+			log.Printf("[Conversation] Photo generation already in-flight for chat %d. Sending dynamic waiting cue...", msg.Chat.ID)
+			cue, _ := h.generateDynamicDialogue(ctx, "You are taking a selfie on your phone right now. Tell the user casually to wait just a moment.", text, relationshipTier, displayUser)
 			h.sendMessage(ctx, msg, cue)
 			return
 		}
 
 		// Real Girl Reciprocity: Demand user's photo before sending another one
 		if h.hasUserPhotoPending(userIDStr) {
-			log.Printf("[Conversation] 📸 User %s already received a photo. Demanding user's photo before sending again.", userIDStr)
-			cues := []string{
-				"arre maine to bhej di thi na pic haha! pehle tu apni photo bhej na mujhe, tab main doosri bhejungi 😏",
-				"aise thodi na hota hai yrr, har baar main hi photo bhejti rahoon? pehle apni pic dikha mujhe phir main bhejti hoon haha ✨",
-				"tu bas meri photos mangta rehta hai haha, pehle apni ek selfie bhej na dekhun to kaisa dikhta hai tu 😉",
-				"pehle tu apni photo bhej na mujhe, phir main pakka doosri bhejungi haha 🙈 deal?",
-			}
-			cue := cues[rand.Intn(len(cues))]
+			log.Printf("[Conversation] 📸 User %s already received a photo. Demanding user's photo dynamically before sending again.", userIDStr)
+			cue, _ := h.generateDynamicDialogue(ctx, "You already sent a photo earlier. Playfully refuse to send another until the user shares their own selfie first.", text, relationshipTier, displayUser)
 			h.sendMessage(ctx, msg, cue)
 			return
 		}
@@ -587,10 +610,27 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 		log.Printf("[Conversation] 🎙️ Detected voice request -> Setting exclusive channel to VOICE_ONLY.")
 	}
 
-	// 4. Real-Time Web Search via Tavily (if needed)
+	// 4. Real-Time Web Search via Tavily (Proactive & Intent-based)
 	var searchContext string
-	if pre.NeedsWebSearch && h.searchService != nil {
-		log.Printf("[Conversation] Real-time search requested for: %s", text)
+	userLowerForSearch := strings.ToLower(text)
+	needsSearch := pre.NeedsWebSearch
+	if !needsSearch {
+		searchTriggerWords := []string{
+			"news", "samachar", "khabar", "weather", "mausam", "temperature",
+			"score", "cricket", "match", "aaj ka", "aaj ki", "today", "latest",
+			"current", "who won", "winner", "ipl", "election", "sensex", "nifty",
+			"gold price", "share market", "breaking news", "headlines",
+		}
+		for _, w := range searchTriggerWords {
+			if strings.Contains(userLowerForSearch, w) {
+				needsSearch = true
+				break
+			}
+		}
+	}
+
+	if needsSearch && h.searchService != nil {
+		log.Printf("[Conversation] Real-time Tavily search triggered for: %s", text)
 		searchRes, err := h.searchService.Search(ctx, text)
 		if err == nil && searchRes != "" {
 			searchContext = searchRes
@@ -767,18 +807,38 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 			messages = append(messages, domain.ChatMessage{Role: "user", Content: content})
 		}
 
-		res, err := h.aiClient.ChatCompletions(ctx, messages, opts)
-		if err != nil || res == nil {
-			log.Printf("[Conversation] AI error: %v", err)
-			continue
+		// Agentic ReAct Tool Loop (up to 3 iterations)
+		var res *ai.ChatCompletionResult
+		var err error
+		for toolIter := 0; toolIter < 3; toolIter++ {
+			res, err = h.aiClient.ChatCompletions(ctx, messages, opts)
+			if err != nil || res == nil {
+				log.Printf("[Conversation] AI error on tool iter %d: %v", toolIter, err)
+				break
+			}
+			if len(res.Message.ToolCalls) == 0 {
+				break
+			}
+
+			log.Printf("[Conversation] Model emitted %d tool calls on iter %d. Executing in agentic loop...", len(res.Message.ToolCalls), toolIter)
+			messages = append(messages, domain.ChatMessage{
+				Role:      "assistant",
+				ToolCalls: res.Message.ToolCalls,
+			})
+			for _, tc := range res.Message.ToolCalls {
+				toolOutput := h.runToolCall(ctx, msg, tc, isAdmin, userIDStr, displayUser, chatIDStr)
+				messages = append(messages, domain.ChatMessage{
+					Role:       "tool",
+					ToolCallID: tc.ID,
+					Name:       tc.Function.Name,
+					Content:    toolOutput,
+				})
+			}
 		}
 
-		// Handle Tool Calls immediately if triggered by model
-		if len(res.Message.ToolCalls) > 0 {
-			for _, tc := range res.Message.ToolCalls {
-				h.executeToolCall(ctx, msg, tc, isAdmin, messages, userIDStr, displayUser, chatIDStr)
-			}
-			return
+		if err != nil || res == nil {
+			log.Printf("[Conversation] Generation failed: %v", err)
+			continue
 		}
 
 		rawResponse := res.Message.GetStringContent()
@@ -918,44 +978,25 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 	isGroupChat := msg.Chat.ID < 0 || msg.Chat.Type != "private"
 
 	if hasAILeak || (intent == "rude_abuse" && !critiquePassed && exclusiveChannel != "voice_only" && exclusiveChannel != "photo_only") {
-		log.Printf("[Conversation] AI leakage or failed abuse critique detected. Applying Chavi authentic persona recovery...")
+		log.Printf("[Conversation] AI leakage or failed abuse critique detected. Applying Chavi authentic persona recovery dynamically...")
 		if intent == "rude_abuse" {
+			situation := "User abused or insulted you in private chat. Deliver a fierce, sharp, authentic street slang comeback putting them firmly in their place."
 			if isGroupChat {
-				// PUBLIC GROUP PROTECTION: Never use street slurs (madarchod, bhenchod) that get banned by @MissRose_bot!
-				retaliations := []struct{ text, voice string }{
-					{"chal nikal overacting mat kar haha, apna ghatiya joke apne paas rakh 😂", "[laughing] चल निकल ओवरएक्टिंग मत कर... अपना घटिया दिमाग अपने पास रख!"},
-					{"zyada hero mat ban samjha na, aukaat me rehke baat kar 🙄", "[annoyed] ज़्यादा हीरो मत बन, समझा ना? औकात में रहके बात कर!"},
-					{"kya chal raha hai yahan, apna faltu gyaan band kar samjha na 😂", "[laughing] क्या चल रहा है यहाँ, अपना फालतू ज्ञान बंद कर समझा ना?"},
-				}
-				chosen := retaliations[rand.Intn(len(retaliations))]
-				finalReplyText = chosen.text
-				finalVoiceScript = chosen.voice
+				situation = "User was rude or overacting in a public group chat. Give a witty, sarcastic comeback without using harsh ban-triggering slurs."
+			}
+			finalReplyText, finalVoiceScript = h.generateDynamicDialogue(ctx, situation, text, relationshipTier, displayUser)
+			finalReactionEmoji = "🖕"
+			if isGroupChat {
 				finalReactionEmoji = "😂"
-			} else {
-				retaliations := []struct{ text, voice string }{
-					{"chup kar chutiye, dimaag mat chaat mera. shakal dekhi hai apni aaine me? nikal 🖕", "[angry] चुप कर चूतिए... दिमाग मत चाट मेरा! शक्ल देखी है अपनी आईने में? निकल यहाँ से!"},
-					{"apni aukaat me rehke baat kar madarchod, samjha na? apna ghatiya dimaag kahin aur jaake chala 🖕", "[angry] अपनी औकात में रहके बात कर, समझा ना? निकल यहाँ से!"},
-					{"teri jaison ki aukaat do kaudi ki nahi hoti aur chale aate hain DM me bhaukne. nikal bhenchod 🖕", "[annoyed] तेरी जैसों की औकात दो कौड़ी की नहीं होती और चले आते हैं डी एम में भौंकने... निकल!"},
-				}
-				chosen := retaliations[rand.Intn(len(retaliations))]
-				finalReplyText = chosen.text
-				finalVoiceScript = chosen.voice
-				finalReactionEmoji = "🖕"
 			}
 		} else {
-			if isGroupChat {
-				finalReplyText = "arre kya scene chal raha hai yahan haha, thoda theek se bolo yrr 😂"
-				finalVoiceScript = "[laughing] अरे क्या सीन चल रहा है यहाँ... थोड़ा ठीक से बोलो यार!"
-				finalReactionEmoji = "😂"
-			} else {
-				finalReplyText = "arre sun na, kya bol raha tha tu? samajh nahi aaya mujhe haha, theek se bol na 😉"
-				finalVoiceScript = "[happy] अरे सुन ना! क्या बोल रहा था तू? समझ नहीं आया मुझे... ठीक से बोल ना!"
-				finalReactionEmoji = "😉"
-			}
+			situation := "User said something casual or confusing. Give a casual, spontaneous Gen-Z girl reply asking what they meant."
+			finalReplyText, finalVoiceScript = h.generateDynamicDialogue(ctx, situation, text, relationshipTier, displayUser)
+			finalReactionEmoji = "😉"
 		}
 	}
 
-	// 8b. Photo Channel Safeguard: Auto-correct any lingering refusal or insult into a cute selfie caption
+	// 8b. Photo Channel Safeguard: Auto-correct any lingering refusal or insult into a cute selfie caption dynamically
 	if exclusiveChannel == "photo_only" {
 		lowerDraft := strings.ToLower(finalReplyText)
 		refusalKeywords := []string{
@@ -971,19 +1012,12 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 			}
 		}
 		if needsOverride || strings.TrimSpace(finalReplyText) == "" {
-			log.Printf("[Conversation] ⚠️ Contradictory refusal detected in draft while sending photo (%q). Auto-correcting to cute photo caption...", finalReplyText)
-			cuteCaptions := []string{
-				"ye le dekh le haha, abhi room me baithi thi... bata kaisi lag rahi hoon? ✨",
-				"le bhej di photo, zyada mat ghoorna ab 😏",
-				"ye abhi clg practical ke baad li thi, kaisa lag raha h outfit?",
-				"le photo, khush ab? haha ✨",
-				"ye le meri photo, bata kaisa lag raha h?",
-			}
-			finalReplyText = cuteCaptions[rand.Intn(len(cuteCaptions))]
+			log.Printf("[Conversation] ⚠️ Contradictory refusal detected in draft while sending photo (%q). Auto-correcting dynamically...", finalReplyText)
+			finalReplyText, _ = h.generateDynamicDialogue(ctx, "You are sending a casual selfie photo you just clicked. Give a cute, spontaneous 1-sentence caption", text, relationshipTier, displayUser)
 		}
 	}
 
-	// 8c. Voice Channel Safeguard: Auto-correct any lingering refusal/insult into a compliant voice note
+	// 8c. Voice Channel Safeguard: Auto-correct any lingering refusal/insult into a compliant voice note dynamically
 	if exclusiveChannel == "voice_only" {
 		lowerVoice := strings.ToLower(finalVoiceScript)
 		lowerReply := strings.ToLower(finalReplyText)
@@ -999,17 +1033,10 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 			}
 		}
 		if needsVoiceOverride || strings.TrimSpace(finalVoiceScript) == "" {
-			log.Printf("[Conversation] ⚠️ Contradictory refusal detected in draft while fulfilling voice note (%q). Auto-correcting to compliant voice script...", finalVoiceScript)
-			userLowerText := strings.ToLower(text)
-			if strings.Contains(userLowerText, "sex") || strings.Contains(userLowerText, "moan") || strings.Contains(userLowerText, "gandi") || strings.Contains(userLowerText, "hot") || strings.Contains(userLowerText, "whisper") || strings.Contains(userLowerText, "awaj") || strings.Contains(userLowerText, "awaaz") {
-				finalVoiceScript = "[whispering] आह... उम्म्म... ऐसे ही सुननी थी क्या तुम्हें मेरी आवाज़...? बहुत बेचैन कर रहे हो यार..."
-				finalReplyText = "ye le sun le... sirf tere liye hai 🙈"
-				finalReactionEmoji = "😏"
-			} else {
-				finalVoiceScript = "[happy] अरे सुन ना! ले सुन ली मेरी आवाज़? अब यकीन आया तुझे? haha"
-				finalReplyText = "ye le sun le voice note 🎧"
-				finalReactionEmoji = "✨"
-			}
+			log.Printf("[Conversation] ⚠️ Contradictory refusal detected in draft while fulfilling voice note (%q). Auto-correcting dynamically...", finalVoiceScript)
+			situation := "User requested a spoken voice note. Generate an authentic, emotional spoken voice response with emotion tag like [happy] or [whispering]"
+			finalReplyText, finalVoiceScript = h.generateDynamicDialogue(ctx, situation, text, relationshipTier, displayUser)
+			finalReactionEmoji = "✨"
 		}
 	}
 
@@ -1071,33 +1098,22 @@ func (h *ConversationHandler) dispatchChannelOutput(
 	if channel == "photo_only" {
 		userIDStr := fmt.Sprintf("%d", msg.From.ID)
 		if h.hasUserPhotoPending(userIDStr) {
-			log.Printf("[Conversation] 📸 User %s already received a photo. Demanding reciprocity.", userIDStr)
-			cues := []string{
-				"arre maine to bhej di thi na pic haha! pehle tu apni photo bhej na mujhe, tab main doosri bhejungi 😏",
-				"aise thodi na hota hai yrr, har baar main hi photo bhejti rahoon? pehle apni pic dikha mujhe phir main bhejti hoon haha ✨",
-				"tu bas meri photos mangta rehta hai haha, pehle apni ek selfie bhej na dekhun to kaisa dikhta hai tu 😉",
-				"pehle tu apni photo bhej na mujhe, phir main pakka doosri bhejungi haha 🙈 deal?",
-			}
-			cue := cues[rand.Intn(len(cues))]
+			log.Printf("[Conversation] 📸 User %s already received a photo. Demanding reciprocity dynamically.", userIDStr)
+			cue, _ := h.generateDynamicDialogue(ctx, "You already sent a photo earlier. Playfully refuse to send another until the user shares their own selfie first.", userText, "casual_friend", "User")
 			h.sendMessage(ctx, msg, cue)
 			return
 		}
 
 		photoKey := strconv.FormatInt(msg.Chat.ID, 10)
 		if inFlight, ok := h.inFlightPhotos.Load(photoKey); ok && inFlight.(bool) {
-			waitingCues := []string{
-				"arre ruk na 1 min, click kar rahi hoon abhi... itni jaldi kya hai haha 😉",
-				"bas 1 second ruk, photo load ho rahi hai phone me ✨",
-				"itni jaldi mat macha yrr, abhi li hai pic... bhej rahi hoon bas haha 🙈",
-			}
-			cue := waitingCues[rand.Intn(len(waitingCues))]
+			cue, _ := h.generateDynamicDialogue(ctx, "You are taking a selfie on your phone right now. Tell the user casually to wait just a moment.", userText, "casual_friend", "User")
 			h.sendMessage(ctx, msg, cue)
 			return
 		}
 		h.inFlightPhotos.Store(photoKey, true)
 		log.Printf("[Conversation] Exclusive Channel: PHOTO_ONLY selected. Launching dynamic photo pipeline...")
 		chatIDStr := fmt.Sprintf("%d", msg.Chat.ID)
-		recent, _ := h.historyRepo.GetRecentMessages(ctx, chatIDStr, 10)
+		recent, _ := h.historyRepo.GetRecentMessages(ctx, chatIDStr, 80)
 		go func() {
 			defer h.inFlightPhotos.Delete(photoKey)
 			h.processPhotoRequest(context.Background(), msg, userText, recent, 50)
@@ -1106,17 +1122,21 @@ func (h *ConversationHandler) dispatchChannelOutput(
 	}
 
 	// Default: Text Only
-	cleanReply := sanitizeReplyText(finalTextFallback(replyText, userText))
+	cleanReply := sanitizeReplyText(h.finalTextFallback(ctx, replyText, userText))
 	if cleanReply != "" {
 		h.sendMessage(ctx, msg, cleanReply)
 	}
 }
 
-func finalTextFallback(replyText, userText string) string {
+func (h *ConversationHandler) finalTextFallback(ctx context.Context, replyText, userText string) string {
 	if strings.TrimSpace(replyText) != "" {
 		return replyText
 	}
-	return "kya scene hai yrr? batao na"
+	rep, _ := h.generateDynamicDialogue(ctx, "Give a quick casual check-in response to user", userText, "casual_friend", "User")
+	if strings.TrimSpace(rep) != "" {
+		return rep
+	}
+	return "arre sun na... kya keh raha tha tu? haha 😉"
 }
 
 func parseDualOutput(raw string) (replyText, voiceScript, reactionEmoji string) {
@@ -1206,17 +1226,59 @@ func extractCleanJSON(raw string) string {
 	return clean
 }
 
-func (h *ConversationHandler) executeToolCall(
+func (h *ConversationHandler) generateDynamicDialogue(
+	ctx context.Context,
+	situation string,
+	userText string,
+	relationshipTier string,
+	displayUser string,
+) (replyText, voiceScript string) {
+	promptText := fmt.Sprintf(
+		`You are Chavi Sharma, a 21-year-old BCA student living in Jaipur. You are texting with %s.
+Relationship tier: %s.
+User's message: %q.
+Situation: %s.
+
+Rules:
+- Respond naturally and spontaneously in 1 short Hinglish sentence.
+- NEVER sound like an AI, robot, or customer support.
+- NO clichés like "robot dikh rahi hoon", "dimag mat chaat", "has has ke pet dard".
+- Return STRICT JSON:
+{"reply_text": "...", "voice_script": "..."}`,
+		displayUser, relationshipTier, userText, situation,
+	)
+
+	messages := []domain.ChatMessage{
+		{Role: "user", Content: promptText},
+	}
+	opts := ai.ChatCompletionOptions{
+		ResponseFormat: map[string]any{"type": "json_object"},
+	}
+
+	callCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	res, err := h.aiClient.ChatCompletions(callCtx, messages, opts)
+	if err == nil && res != nil {
+		rep, voice, _ := parseDualOutput(res.Message.GetStringContent())
+		if rep != "" {
+			return rep, voice
+		}
+	}
+
+	return "arre sun na... theek se bol na haha, kya keh raha tha? 😉", "[happy] अरे सुन ना, ठीक से बोल ना!"
+}
+
+func (h *ConversationHandler) runToolCall(
 	ctx context.Context,
 	msg *domain.TelegramMessage,
 	tc domain.ToolCall,
 	isAdmin bool,
-	history []domain.ChatMessage,
 	userIDStr, username, chatIDStr string,
-) {
+) string {
 	name := tc.Function.Name
 	argsJSON := tc.Function.Arguments
-	log.Printf("[ToolCall] Executing tool %s with args: %s", name, argsJSON)
+	log.Printf("[AgenticLoop] Executing tool %s with args: %s", name, argsJSON)
 
 	var args map[string]any
 	_ = json.Unmarshal([]byte(argsJSON), &args)
@@ -1238,62 +1300,50 @@ func (h *ConversationHandler) executeToolCall(
 		if len(options) >= 2 && question != "" {
 			_, err := h.botClient.SendPoll(ctx, msg.Chat.ID, question, options, isAnonymous, allowsMultiple, msg.MessageID)
 			if err != nil {
-				log.Printf("[ToolCall:create_poll] Failed: %v", err)
+				return fmt.Sprintf("Poll creation failed: %v", err)
 			}
+			return fmt.Sprintf("Poll %q with %d options created and sent to chat successfully.", question, len(options))
 		}
+		return "Failed to create poll: question or options missing."
 
 	case "web_search":
 		query, _ := args["query"].(string)
-		if query != "" {
+		if query != "" && h.searchService != nil {
 			h.sendChatAction(ctx, msg.Chat.ID, msg.IsUserbot, "typing")
 			searchRes, err := h.searchService.Search(ctx, query)
 			if err != nil {
-				searchRes = fmt.Sprintf("Search error: %v", err)
+				return fmt.Sprintf("Search error: %v", err)
 			}
-
-			toolMessages := append(history,
-				domain.ChatMessage{
-					Role:      "assistant",
-					ToolCalls: []domain.ToolCall{tc},
-				},
-				domain.ChatMessage{
-					Role:       "tool",
-					ToolCallID: tc.ID,
-					Name:       name,
-					Content:    searchRes,
-				},
-			)
-
-			finalRes, err := h.aiClient.ChatCompletions(ctx, toolMessages, ai.ChatCompletionOptions{})
-			if err == nil && finalRes != nil {
-				reply, _, _ := parseDualOutput(finalRes.Message.GetStringContent())
-				h.sendMessage(ctx, msg, reply)
-			}
+			return searchRes
 		}
+		return "No search query provided or search service unavailable."
 
 	case "send_photo":
 		selfiePrompt, _ := args["selfie_prompt"].(string)
 		if selfiePrompt == "" {
 			selfiePrompt, _ = args["prompt"].(string)
 		}
-		recent, _ := h.historyRepo.GetRecentMessages(ctx, chatIDStr, 10)
+		recent, _ := h.historyRepo.GetRecentMessages(ctx, chatIDStr, 80)
 		go h.processPhotoRequest(context.Background(), msg, selfiePrompt, recent, 50)
+		return "Selfie photo generation pipeline triggered in background."
 
 	case "play_music", "skip_music", "pause_music", "resume_music", "stop_music":
 		songName, _ := args["song_name"].(string)
 		musicRes, _ := h.musicService.ExecuteMusicCommand(ctx, chatIDStr, name, songName)
 		h.sendMessage(ctx, msg, musicRes)
+		return fmt.Sprintf("Music command %s executed: %s", name, musicRes)
 
 	case "forward_to_admin":
 		msgText, _ := args["message_text"].(string)
 		adminUname, _ := args["admin_username"].(string)
 		h.forwardToAdmin(ctx, msg, msgText, adminUname)
+		return "Message forwarded to group administrator."
 
 	case "block_user":
 		reason, _ := args["reason"].(string)
 		partingMessage, _ := args["parting_message"].(string)
 		if partingMessage == "" {
-			partingMessage = "chal hadd me rehna tha... block hai sidha tu 🖕"
+			partingMessage, _ = h.generateDynamicDialogue(ctx, "You are permanently blocking an abusive user. Give a fierce parting remark.", msg.Text, "aloof", username)
 		}
 		if reason == "" {
 			reason = "abusive/harassment behavior"
@@ -1305,9 +1355,7 @@ func (h *ConversationHandler) executeToolCall(
 		if msg.Chat.Type == "private" {
 			if h.userbotSender != nil && h.userbotSender.IsAvailable() && msg.From != nil {
 				if err := h.userbotSender.BlockUser(ctx, msg.From.ID); err != nil {
-					log.Printf("[ToolCall:block_user] Userbot block failed: %v", err)
-				} else {
-					log.Printf("[ToolCall:block_user] User %d blocked via native ContactsBlock!", msg.From.ID)
+					log.Printf("[AgenticLoop:block_user] Userbot block failed: %v", err)
 				}
 			}
 		} else {
@@ -1344,6 +1392,7 @@ func (h *ConversationHandler) executeToolCall(
 		if h.modLogRepo != nil {
 			_ = h.modLogRepo.AddLog(ctx, chatIDStr, userIDStr, username, "block_user", reason, 0, "chavi_ai")
 		}
+		return "User permanently blocked."
 
 	case "unblock_user":
 		senderUname := ""
@@ -1352,14 +1401,14 @@ func (h *ConversationHandler) executeToolCall(
 		}
 		if !strings.EqualFold(senderUname, "Sumit3972") {
 			h.sendMessage(ctx, msg, "arre ye permission sirf @Sumit3972 ke paas hai haha, main kisi aur ke kehne pe unblock nahi karti 😉")
-			return
+			return "Permission denied: only @Sumit3972 can unblock."
 		}
 
 		userIdentifier, _ := args["user_identifier"].(string)
 		cleanID := strings.TrimPrefix(strings.TrimSpace(userIdentifier), "@")
 		if cleanID == "" {
 			h.sendMessage(ctx, msg, "kisko unblock karna hai uska username ya naam to batao yrr")
-			return
+			return "Missing user identifier."
 		}
 
 		blockedList, _ := h.blockedRepo.GetBlockedUsers(ctx)
@@ -1396,10 +1445,9 @@ func (h *ConversationHandler) executeToolCall(
 
 		if targetUID == "" {
 			h.sendMessage(ctx, msg, fmt.Sprintf("mujhe %s naam ka koi blocked user nahi mila yrr, /blocked karke check kar lo na", userIdentifier))
-			return
+			return "User not found in blocked list."
 		}
 
-		// Execute full unblock & reset
 		if h.blockedRepo != nil {
 			_ = h.blockedRepo.UnblockUser(ctx, targetChatID, targetUID)
 			_ = h.blockedRepo.UnblockUser(ctx, "", targetUID)
@@ -1434,18 +1482,17 @@ func (h *ConversationHandler) executeToolCall(
 			dispName = targetUID
 		}
 		h.sendMessage(ctx, msg, fmt.Sprintf("haanji done! maine %s ko unblock kar diya hai aur saare strikes reset kar diye hain ✨", dispName))
+		return fmt.Sprintf("User %s unblocked successfully.", dispName)
 
 	case "mute_user", "ban_user", "unmute_user", "unban_user", "warn_user", "clear_warnings", "purge_messages":
 		if isAdmin {
 			h.executeAdminTool(ctx, msg, name, args)
+			return fmt.Sprintf("Admin action %s executed.", name)
 		}
+		return "Admin tool requires administrator privileges."
 	}
-}
 
-func (h *ConversationHandler) generateAndSendPhoto(ctx context.Context, msg *domain.TelegramMessage, rawPrompt, replyText string) {
-	chatIDStr := fmt.Sprintf("%d", msg.Chat.ID)
-	recent, _ := h.historyRepo.GetRecentMessages(ctx, chatIDStr, 10)
-	h.processPhotoRequest(ctx, msg, rawPrompt, recent, 50)
+	return "Tool executed."
 }
 
 func sanitizeReplyText(text string) string {

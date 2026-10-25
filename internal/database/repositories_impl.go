@@ -617,7 +617,7 @@ func (r *relationshipRepo) GetRelationship(ctx context.Context, chatID, userID s
 }
 
 func (r *relationshipRepo) UpdateAffection(ctx context.Context, chatID, userID, username, firstName, lastName, gender string, delta int) (int, error) {
-	var currentScore int = 50
+	var currentScore int = 15
 	existing, err := r.GetRelationship(ctx, chatID, userID)
 	if err == nil && existing != nil {
 		currentScore = existing.AffectionScore
@@ -652,7 +652,7 @@ func (r *relationshipRepo) UpdateProfile(ctx context.Context, chatID, userID, fi
 	now := time.Now().Unix()
 	_, err := r.pool.Exec(ctx, `
 		INSERT INTO relationships (chat_id, user_id, username, first_name, last_name, gender, affection_score, intimacy_level, last_interaction)
-		VALUES ($1, $2, '', $3, $4, $5, 50, 1, $6)
+		VALUES ($1, $2, '', $3, $4, $5, 15, 1, $6)
 		ON CONFLICT (chat_id, user_id) DO UPDATE SET
 			first_name = CASE WHEN EXCLUDED.first_name != '' THEN EXCLUDED.first_name ELSE relationships.first_name END,
 			last_name = CASE WHEN EXCLUDED.last_name != '' THEN EXCLUDED.last_name ELSE relationships.last_name END,

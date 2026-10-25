@@ -182,7 +182,7 @@ func main() {
 			return
 		}
 
-		ticker := time.NewTicker(6 * time.Hour)
+		ticker := time.NewTicker(30 * time.Minute)
 		defer ticker.Stop()
 
 		for {

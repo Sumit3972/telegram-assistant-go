@@ -42,7 +42,3 @@ go build -o dist/bot.exe cmd/bot/main.go
 ./dist/bot.exe
 ```
 
-### 4. Run Unit Tests
-```powershell
-go test -v ./...
-```

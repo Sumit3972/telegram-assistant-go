@@ -106,7 +106,7 @@ CREATE TABLE IF NOT EXISTS relationships (
   first_name TEXT DEFAULT '',
   last_name TEXT DEFAULT '',
   gender TEXT DEFAULT '',
-  affection_score INTEGER DEFAULT 50,
+  affection_score INTEGER DEFAULT 15,
   intimacy_level INTEGER DEFAULT 1,
   current_outfit TEXT DEFAULT '',
   outfit_updated_at INTEGER DEFAULT 0,

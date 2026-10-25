@@ -142,6 +142,12 @@ func (m *Moderator) HandleUpdate(ctx context.Context, update *domain.TelegramUpd
 		return
 	}
 
+	// Drop Telegram official service notifications (ID 777000 or username Telegram)
+	if msg.Chat.ID == 777000 || (msg.From != nil && (msg.From.ID == 777000 || strings.EqualFold(msg.From.Username, "Telegram"))) {
+		log.Printf("[Moderator] Dropping Telegram official service notification (ID: %d)", msg.Chat.ID)
+		return
+	}
+
 	// Skip stale messages
 	if msg.Date > 0 && msg.Date < m.bootTime {
 		return
