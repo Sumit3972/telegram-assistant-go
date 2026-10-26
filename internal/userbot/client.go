@@ -983,6 +983,42 @@ func (ub *UserbotManager) SendChatAction(ctx context.Context, chatID int64, acti
 	return err
 }
 
+// MarkAsRead sends read receipt (double blue ticks) natively via MTProto.
+func (ub *UserbotManager) MarkAsRead(ctx context.Context, chatID int64, maxMsgID int) error {
+	ub.senderMu.RLock()
+	rawAPI := ub.rawAPI
+	ub.senderMu.RUnlock()
+
+	if rawAPI == nil {
+		return fmt.Errorf("userbot MTProto client is not connected")
+	}
+
+	peer, err := ub.getInputPeer(ctx, chatID)
+	if err != nil {
+		return err
+	}
+
+	switch p := peer.(type) {
+	case *tg.InputPeerChannel:
+		_, err = rawAPI.ChannelsReadHistory(ctx, &tg.ChannelsReadHistoryRequest{
+			Channel: &tg.InputChannel{
+				ChannelID:  p.ChannelID,
+				AccessHash: p.AccessHash,
+			},
+			MaxID: maxMsgID,
+		})
+	default:
+		_, err = rawAPI.MessagesReadHistory(ctx, &tg.MessagesReadHistoryRequest{
+			Peer:  peer,
+			MaxID: maxMsgID,
+		})
+	}
+	if err == nil {
+		log.Printf("[Userbot] ✅ Marked history as read (double tick) in chat %d up to msg %d", chatID, maxMsgID)
+	}
+	return err
+}
+
 // BlockUser blocks a user natively on Telegram via MTProto ContactsBlock.
 func (ub *UserbotManager) BlockUser(ctx context.Context, userID int64) error {
 	ub.senderMu.RLock()

@@ -28,7 +28,7 @@ func NewVoiceService(apiKey string, refID ...string) *VoiceService {
 	return &VoiceService{
 		apiKey:      apiKey,
 		referenceID: chosenRef,
-		httpClient:  &http.Client{Timeout: 90 * time.Second},
+		httpClient:  &http.Client{Timeout: 120 * time.Second},
 	}
 }
 
@@ -46,8 +46,8 @@ func (s *VoiceService) GenerateVoice(ctx context.Context, text string) ([]byte, 
 
 	// 1. Normalize emotion tags to Fish Audio standard format ([sigh], [laughing], etc.)
 	normalizedText := prompt.NormalizeEmotionTags(text)
-	if len(normalizedText) > 2000 {
-		normalizedText = normalizedText[:2000]
+	if len(normalizedText) > 2500 {
+		normalizedText = normalizedText[:2500]
 	}
 
 	log.Printf("[VoiceService:FishAudio] Synthesizing script: %q (VoiceRef=%s)", normalizedText, s.referenceID)

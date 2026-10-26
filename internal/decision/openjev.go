@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"telegram-ai-assistant/internal/prompt"
 )
 
 const (
@@ -212,29 +214,7 @@ func (c *Client) PreDecision(ctx context.Context, userText, historyContext, inte
 		"reaction_emoji": choiceQuestion{
 			Type:         "choice",
 			Instructions: "If should_react is True, select the fitting emoji reaction, else none.",
-			Criteria: map[string]string{
-				"none":          "No reaction",
-				"heart":         "Heart ❤️ (sweet, lovely, caring)",
-				"laugh":         "Laugh 😂 (funny joke, banter)",
-				"skull":         "Skull 💀 (dead laughing, hilarious roast, savage)",
-				"fire":          "Fire 🔥 (hype, hot picture, compliment)",
-				"smirk":         "Smirk 😏 (flirty teasing, naughty vibe)",
-				"crying":        "Crying 😭 (overdramatic, can't handle it, relatable pain)",
-				"rolling_eyes":  "Eye roll 🙄 (sarcasm, annoying, college drama)",
-				"eyes":          "Side eyes 👀 (curious, gossip, noticing something juicy)",
-				"salute":        "Salute 🫡 (respect, agreed, on it boss)",
-				"thinking":      "Thinking 🤔 (skeptical, wondering, questioning)",
-				"shocked":       "Shocked 😱 (unbelievable news, dramatic shock)",
-				"heart_eyes":    "Heart eyes 😍 (loving an outfit, cafe or gesture)",
-				"clown":         "Clown 🤡 (foolish, goofy, clown moment)",
-				"middle_finger": "Middle finger 🖕 (retaliation against abusive creeps)",
-				"party":         "Party 🎉 (celebrating news, birthday, exam passed)",
-				"pray":          "Pray 🙏 (requesting, thanks, sarcastic bhagwan bachaye)",
-				"hundred":       "100 💯 (facts, full agreement)",
-				"sparkles":      "Sparkles ✨ (aesthetic, pretty, cute vibe)",
-				"tea":           "Tea/Coffee ☕ (chai lovers, chilling at Tapri)",
-				"angry":         "Angry 😡 (pissed off, annoyed)",
-			},
+			Criteria:     prompt.PreDecisionReactionCriteria(),
 		},
 		"affection_change": scoreQuestion{
 			Type:         "score",
@@ -309,33 +289,18 @@ func (c *Client) PreDecision(ctx context.Context, userText, historyContext, inte
 
 	// emoji mapping
 	reactChoice := strings.ToLower(strings.TrimSpace(answers["reaction_emoji"].Choice))
-	emojiMap := map[string]string{
-		"none":          "",
-		"heart":         "❤️",
-		"laugh":         "😂",
-		"skull":         "💀",
-		"fire":          "🔥",
-		"smirk":         "😏",
-		"crying":        "😭",
-		"rolling_eyes":  "🙄",
-		"eyes":          "👀",
-		"salute":        "🫡",
-		"thinking":      "🤔",
-		"shocked":       "😱",
-		"heart_eyes":    "😍",
-		"clown":         "🤡",
-		"middle_finger": "🖕",
-		"party":         "🎉",
-		"pray":          "🙏",
-		"hundred":       "💯",
-		"sparkles":      "✨",
-		"tea":           "☕",
-		"angry":         "😡",
-	}
-
 	reactionEmoji := ""
-	if shouldReact {
-		reactionEmoji = emojiMap[reactChoice]
+	if shouldReact && reactChoice != "" && reactChoice != "none" {
+		if emo, ok := prompt.ReactionEmojiMap[reactChoice]; ok {
+			reactionEmoji = emo
+		} else {
+			for key, emo := range prompt.ReactionEmojiMap {
+				if reactChoice == strings.ToLower(key) || strings.Contains(reactChoice, emo) {
+					reactionEmoji = emo
+					break
+				}
+			}
+		}
 	}
 
 	shouldReply := answers["should_reply"].Noul > 0.5
@@ -543,4 +508,50 @@ func (c *Client) ClassifyMessage(ctx context.Context, text string) (Classificati
 		Confidence: 1.0,
 		Intensity:  1,
 	}, nil
+}
+
+// PredictReactionEmoji asks OpenJev to evaluate a sticker or standalone emoji message and select the most fitting reaction from the allowed Telegram reaction emojis.
+func (c *Client) PredictReactionEmoji(ctx context.Context, stickerEmoji, userText, historyContext string) string {
+	if c.apiKey == "" {
+		return "❤️"
+	}
+
+	loc := time.FixedZone("IST", 5*3600+30*60)
+	now := time.Now().In(loc)
+	currentTimeStr := now.Format("Monday, January 02, 2006 at 03:04 PM IST")
+
+	content := strings.TrimSpace(userText)
+	if stickerEmoji != "" {
+		content = fmt.Sprintf("[Sticker: %s] %s", stickerEmoji, content)
+	}
+
+	state := fmt.Sprintf(
+		"Current Date & Time: %s (Year: %d)\nPersona: Chavi Sharma, authentic 21yo Indian girl in Jaipur\n>>> INCOMING USER STICKER / EMOJI: %q <<<\nBackground context: %s",
+		currentTimeStr, now.Year(), content, historyContext,
+	)
+
+	questions := map[string]interface{}{
+		"reaction": choiceQuestion{
+			Type:         "choice",
+			Instructions: "The user sent a Telegram sticker or emoji. Pick the best natural Gen-Z female emoji reaction for Chavi (21yo girl) from the available Telegram reaction emojis.",
+			Criteria:     prompt.ReactionCriteria,
+		},
+	}
+
+	answers, err := c.callSystemOne(ctx, state, questions)
+	if err != nil {
+		log.Printf("[OpenJev] PredictReactionEmoji failed: %v. Using fallback.", err)
+		return prompt.DefaultReactionEmoji()
+	}
+
+	choice := strings.ToLower(strings.TrimSpace(answers["reaction"].Choice))
+	if emo, ok := prompt.ReactionEmojiMap[choice]; ok && emo != "" {
+		return emo
+	}
+	for key, emo := range prompt.ReactionEmojiMap {
+		if choice == strings.ToLower(key) || strings.Contains(choice, emo) {
+			return emo
+		}
+	}
+	return prompt.DefaultReactionEmoji()
 }

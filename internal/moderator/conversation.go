@@ -198,6 +198,17 @@ func (h *ConversationHandler) EnqueueConversation(ctx context.Context, msg *doma
 		text = strings.TrimSpace(msg.Caption)
 	}
 
+	// Fast-path: solitary sticker or standalone emoji with no existing batch gets handled immediately
+	if msg.Sticker != nil || prompt.IsStandaloneEmoji(text) {
+		h.batchMu.Lock()
+		_, exists := h.batches[key]
+		h.batchMu.Unlock()
+		if !exists {
+			go h.HandleConversation(ctx, msg, isAdmin)
+			return
+		}
+	}
+
 	h.batchMu.Lock()
 	defer h.batchMu.Unlock()
 
@@ -373,6 +384,43 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 			log.Printf("[Conversation] 🚫 User %s is permanently blocked in %s. Dropping message.", userIDStr, chatIDStr)
 			return
 		}
+	}
+
+	// Send MTProto Read Receipt (Double Blue Ticks) to confirm message was seen by human
+	if h.userbotSender != nil && h.userbotSender.IsAvailable() && msg.MessageID > 0 {
+		_ = h.userbotSender.MarkAsRead(ctx, msg.Chat.ID, msg.MessageID)
+	}
+
+	// Instant Sticker & Standalone Emoji Interceptor (Fast Jev reaction, zero text reply)
+	isSticker := msg.Sticker != nil
+	isEmojiOnly := prompt.IsStandaloneEmoji(text)
+	if isSticker || isEmojiOnly {
+		stickerEmo := ""
+		if msg.Sticker != nil {
+			stickerEmo = msg.Sticker.Emoji
+		}
+		recentHist, _ := h.historyRepo.GetRecentMessages(ctx, chatIDStr, 6)
+		var histSnippets []string
+		for _, rh := range recentHist {
+			histSnippets = append(histSnippets, fmt.Sprintf("%s: %s", rh.Username, rh.MessageText))
+		}
+		histCtx := strings.Join(histSnippets, "\n")
+
+		chosenReaction := ""
+		if h.decisionClient != nil {
+			chosenReaction = h.decisionClient.PredictReactionEmoji(ctx, stickerEmo, text, histCtx)
+		}
+		if chosenReaction == "" {
+			chosenReaction = prompt.DefaultReactionEmoji()
+		}
+
+		// Real human reaction delay (~700ms - 1300ms)
+		time.Sleep(time.Duration(700+rand.Intn(600)) * time.Millisecond)
+
+		h.setReaction(ctx, msg, chosenReaction)
+		_ = h.historyRepo.AddMessage(ctx, chatIDStr, "assistant", h.botUsername, fmt.Sprintf("[Reacted with %s]", chosenReaction), "", strconv.Itoa(msg.MessageID))
+		log.Printf("[Conversation] ✅ Fast sticker/emoji reaction sent via Jev: %s on msg %d (No text reply)", chosenReaction, msg.MessageID)
+		return
 	}
 
 	// 0c. Conversational unblock / unban shortcut for Owner/Mom/Devin/Sumit
@@ -582,37 +630,25 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 	// Auto-align exclusive channel if user asks for photo or voice
 	exclusiveChannel := pre.ExclusiveChannel
 	userLower := strings.ToLower(text)
+	detectedLang := prompt.DetectLanguage(text)
 
-	hasPhotoKW := strings.Contains(userLower, "photo") || strings.Contains(userLower, "pic") || strings.Contains(userLower, "selfie") || strings.Contains(userLower, "picture") || strings.Contains(userLower, "tasveer") || strings.Contains(userLower, "shakal")
-	hasVoiceKW := strings.Contains(userLower, "voice") || strings.Contains(userLower, "audio") || strings.Contains(userLower, "awaaz") || strings.Contains(userLower, "awaz") || strings.Contains(userLower, "bol ke") || strings.Contains(userLower, "bolke") || strings.Contains(userLower, "speak") || strings.Contains(userLower, "sunao") || strings.Contains(userLower, "voice note")
-
-	isPhotoReq := false
-	isVoiceReq := false
-
-	if hasVoiceKW && !hasPhotoKW {
-		// Explicit voice request with no photo words -> ALWAYS VOICE_ONLY
-		isVoiceReq = true
-		exclusiveChannel = "voice_only"
-		intent = "asking_voice"
-	} else if hasPhotoKW && !hasVoiceKW {
-		// Explicit photo request with no voice words -> ALWAYS PHOTO_ONLY
-		isPhotoReq = true
-		exclusiveChannel = "photo_only"
-		intent = "asking_photo"
-	} else {
-		// Fallback to OpenJev decision
-		if exclusiveChannel == "photo_only" || intent == "asking_photo" {
-			isPhotoReq = true
-			exclusiveChannel = "photo_only"
-			intent = "asking_photo"
-		} else if exclusiveChannel == "voice_only" || intent == "asking_voice" {
-			isVoiceReq = true
-			exclusiveChannel = "voice_only"
-			intent = "asking_voice"
+	// Bot Challenge Check in DMs: If user questions if Chavi is a real girl or a bot, trigger voice note proof
+	isBotChallenge := false
+	if msg.Chat.Type == "private" {
+		botChallengeTerms := []string{
+			"are you bot", "are you a bot", "bot ho kya", "bot hai kya", "bot ho?", "bot h kya",
+			"real ho ya bot", "real ladki ho ya", "prove it", "prove karo", "fake ho", "bot lag rahi ho", "tu bot hai",
+		}
+		for _, bct := range botChallengeTerms {
+			if strings.Contains(userLower, bct) {
+				isBotChallenge = true
+				log.Printf("[Conversation] 🎙️ Bot challenge detected in DM (%q) -> Triggering spontaneous voice note proof!", text)
+				break
+			}
 		}
 	}
 
-	// 3b. Dynamic Abuse Evaluation via OpenJev (Zero Hardcoding)
+	// 3b. Dynamic Abuse Evaluation via OpenJev (Strictly evaluated BEFORE photo/voice reciprocity)
 	isAbuse, _, maxStrikes, abuseReason := EvaluateAbuseFromDecision(pre)
 	if IsOwnerOrMom(msg) {
 		isAbuse = false // Never abuse-strike or block owner/Mom/Devin/Sumit
@@ -620,8 +656,6 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 	if isAbuse {
 		log.Printf("[Conversation] 🚨 Abuse detected via OpenJev: severity=%s, maxStrikes=%d, reason=%s", pre.AbuseSeverity, maxStrikes, abuseReason)
 		// Strict media & location lockdown: No selfies, photos, or voice notes for abusers!
-		isPhotoReq = false
-		isVoiceReq = false
 		exclusiveChannel = "text_only"
 
 		activeStrikes, _ := GetActiveStrikesWithDecay(ctx, h.abuseRepo, chatIDStr, userIDStr)
@@ -676,7 +710,40 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 		}
 	}
 
-	if isPhotoReq {
+	hasPhotoKW := strings.Contains(userLower, "photo") || strings.Contains(userLower, "pic") || strings.Contains(userLower, "selfie") || strings.Contains(userLower, "picture") || strings.Contains(userLower, "tasveer") || strings.Contains(userLower, "shakal")
+	hasVoiceKW := strings.Contains(userLower, "voice") || strings.Contains(userLower, "audio") || strings.Contains(userLower, "awaaz") || strings.Contains(userLower, "awaz") || strings.Contains(userLower, "bol ke") || strings.Contains(userLower, "bolke") || strings.Contains(userLower, "speak") || strings.Contains(userLower, "sunao") || strings.Contains(userLower, "voice note")
+
+	isPhotoReq := false
+	isVoiceReq := false
+
+	if isBotChallenge {
+		isVoiceReq = true
+		exclusiveChannel = "voice_only"
+		intent = "asking_voice"
+	} else if hasVoiceKW && !hasPhotoKW {
+		// Explicit voice request with no photo words -> ALWAYS VOICE_ONLY
+		isVoiceReq = true
+		exclusiveChannel = "voice_only"
+		intent = "asking_voice"
+	} else if hasPhotoKW && !hasVoiceKW {
+		// Explicit photo request with no voice words -> ALWAYS PHOTO_ONLY
+		isPhotoReq = true
+		exclusiveChannel = "photo_only"
+		intent = "asking_photo"
+	} else {
+		// Fallback to OpenJev decision
+		if exclusiveChannel == "photo_only" || intent == "asking_photo" {
+			isPhotoReq = true
+			exclusiveChannel = "photo_only"
+			intent = "asking_photo"
+		} else if exclusiveChannel == "voice_only" || intent == "asking_voice" {
+			isVoiceReq = true
+			exclusiveChannel = "voice_only"
+			intent = "asking_voice"
+		}
+	}
+
+	if isPhotoReq && !isAbuse {
 		if relationshipTier == "stranger" && !IsOwnerOrMom(msg) {
 			log.Printf("[Conversation] 🚫 User %s is a stranger (tier: %s, affection: %d). Politely declining photo request.", userIDStr, relationshipTier, affectionScore)
 			refusal, _ := h.generateDynamicDialogue(ctx, "The user asked for your photo, but you two are complete strangers and just started talking. Playfully decline, saying you don't send pictures to strangers without knowing them first.", text, "stranger", displayUser)
@@ -692,8 +759,20 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 			return
 		}
 
-		// Real Girl Reciprocity: Demand user's photo before sending another one
+		// Real Girl Reciprocity with loop breaker
 		if h.hasUserPhotoPending(userIDStr) {
+			userCantSendPhoto := strings.Contains(userLower, "nhi") || strings.Contains(userLower, "nahi") ||
+				strings.Contains(userLower, "no") || strings.Contains(userLower, "dont") ||
+				strings.Contains(userLower, "cant") || strings.Contains(userLower, "kharab") ||
+				strings.Contains(userLower, "mere pas") || strings.Contains(userLower, "mere paas")
+
+			if userCantSendPhoto {
+				log.Printf("[Conversation] 📸 User %s indicates they cannot share photo. Gracefully pivoting conversation without repeating refusal loop.", userIDStr)
+				cue, _ := h.generateDynamicDialogue(ctx, "The user says they don't have a photo or can't share right now. Playfully tease them for being shy, drop the photo topic gracefully, and ask what else they were doing today.", text, relationshipTier, displayUser)
+				h.sendMessage(ctx, msg, cue)
+				return
+			}
+
 			log.Printf("[Conversation] 📸 User %s already received a photo. Demanding user's photo dynamically before sending again.", userIDStr)
 			cue, _ := h.generateDynamicDialogue(ctx, "You already sent a photo earlier. Playfully refuse to send another until the user shares their own selfie first.", text, relationshipTier, displayUser)
 			h.sendMessage(ctx, msg, cue)
@@ -853,11 +932,13 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 			ExclusiveChannel: exclusiveChannel,
 			UserMessage:      text,
 			ShouldReact:      pre.ShouldReact,
-			SuggestedEmoji:   pre.ReactionEmoji,
-			HistoryContext:   historyContext,
+			SuggestedEmoji:         pre.ReactionEmoji,
+			HistoryContext:         historyContext,
 			IsGroupChat:            msg.Chat.ID < 0,
 			GroupLanguage:          detectGroupLanguage(text, historyContext),
 			RecentAssistantReplies: h.getRecentReplies(msg.Chat.ID),
+			DetectedLanguage:       detectedLang,
+			IsBotChallenge:         isBotChallenge,
 		})
 
 		messages := []domain.ChatMessage{
@@ -1090,7 +1171,7 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 				situation = "User was rude or overacting in a public group chat. Give a witty, sarcastic comeback without using harsh ban-triggering slurs."
 			}
 			finalReplyText, finalVoiceScript = h.generateDynamicDialogue(ctx, situation, text, relationshipTier, displayUser)
-			finalReactionEmoji = "🖕"
+			finalReactionEmoji = "💀"
 			if isGroupChat {
 				finalReactionEmoji = "😂"
 			}
@@ -1626,9 +1707,12 @@ func sanitizeReplyText(text string) string {
 }
 
 func (h *ConversationHandler) sendMessage(ctx context.Context, msg *domain.TelegramMessage, text string) {
-	// Natural human typing action delay (1.2s to 2.5s)
+	// Natural human typing action delay proportional to message length (~35ms per character)
 	h.sendChatAction(ctx, msg.Chat.ID, msg.IsUserbot, "typing")
-	typeDelay := time.Duration(1200+rand.Intn(1300)) * time.Millisecond
+	typeDelay := time.Duration(600+len(text)*32+rand.Intn(400)) * time.Millisecond
+	if typeDelay > 4200*time.Millisecond {
+		typeDelay = 4200 * time.Millisecond
+	}
 	select {
 	case <-time.After(typeDelay):
 	case <-ctx.Done():

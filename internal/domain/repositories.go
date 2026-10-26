@@ -109,5 +109,6 @@ type UserbotSender interface {
 	BlockUser(ctx context.Context, userID int64) error
 	UnblockUser(ctx context.Context, userID int64) error
 	ResolveUsername(ctx context.Context, username string) (userID int64, firstName string, err error)
+	MarkAsRead(ctx context.Context, chatID int64, maxMsgID int) error
 	IsAvailable() bool
 }
