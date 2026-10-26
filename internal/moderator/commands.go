@@ -518,7 +518,8 @@ func (h *CommandHandler) HandleCommand(ctx context.Context, msg *domain.Telegram
 			},
 		}
 
-		res, err := h.aiClient.ChatCompletions(ctx, summaryPrompt, ai.ChatCompletionOptions{})
+		maxTokens := 40000
+		res, err := h.aiClient.ChatCompletions(ctx, summaryPrompt, ai.ChatCompletionOptions{MaxTokens: &maxTokens})
 		if err == nil && res != nil {
 			summaryText := fmt.Sprintf("📋 <b>Group Conversation Summary:</b>\n\n%s", res.Message.GetStringContent())
 			_, _ = h.botClient.SendMessage(ctx, msg.Chat.ID, summaryText, telegram.SendMessageOptions{ParseMode: "HTML", ReplyToID: msg.MessageID})

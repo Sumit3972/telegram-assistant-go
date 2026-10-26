@@ -85,3 +85,61 @@ func TestReactionEmojis(t *testing.T) {
 	}
 }
 
+func TestSplitIntoDMBubbles(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		wantB1    string
+		wantB2    string
+		shouldSpl bool
+	}{
+		{
+			name:      "Question break",
+			input:     "sach me? mujhe to laga tum mazak kar rahe the haha",
+			wantB1:    "sach me?",
+			wantB2:    "mujhe to laga tum mazak kar rahe the haha",
+			shouldSpl: true,
+		},
+		{
+			name:      "Laugh emoji break",
+			input:     "arre nahi yaar haha 😂 clg me lab practical tha to phone bag me hi reh gaya",
+			wantB1:    "arre nahi yaar haha 😂",
+			wantB2:    "clg me lab practical tha to phone bag me hi reh gaya",
+			shouldSpl: true,
+		},
+		{
+			name:      "Short message no split",
+			input:     "haha haan sahi baat hai",
+			wantB1:    "haha haan sahi baat hai",
+			wantB2:    "",
+			shouldSpl: false,
+		},
+		{
+			name:      "Newline break",
+			input:     "arre sun na\naaj MAU me lab practical bohot lamba chala gaya tha",
+			wantB1:    "arre sun na",
+			wantB2:    "aaj MAU me lab practical bohot lamba chala gaya tha",
+			shouldSpl: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b1, b2 := SplitIntoDMBubbles(tt.input)
+			if tt.shouldSpl {
+				if b2 == "" {
+					t.Errorf("Expected split, got b1=%q, b2=%q", b1, b2)
+				}
+				if b1 != tt.wantB1 || b2 != tt.wantB2 {
+					t.Errorf("Split mismatch:\n got: b1=%q, b2=%q\nwant: b1=%q, b2=%q", b1, b2, tt.wantB1, tt.wantB2)
+				}
+			} else {
+				if b2 != "" {
+					t.Errorf("Expected no split, got b2=%q", b2)
+				}
+			}
+		})
+	}
+}
+
+

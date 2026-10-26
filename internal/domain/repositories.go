@@ -102,6 +102,7 @@ type AbuseRecordRepository interface {
 
 type UserbotSender interface {
 	SendMessage(ctx context.Context, chatID int64, text string, replyToID int) error
+	SendMessageGetID(ctx context.Context, chatID int64, text string, replyToID int) (int, error)
 	SendPhoto(ctx context.Context, chatID int64, photoData []byte, photoURL, caption string, replyToID int) error
 	SendVoice(ctx context.Context, chatID int64, voiceData []byte, replyToID int) error
 	SetReaction(ctx context.Context, chatID int64, msgID int, emoji string) error
@@ -110,5 +111,7 @@ type UserbotSender interface {
 	UnblockUser(ctx context.Context, userID int64) error
 	ResolveUsername(ctx context.Context, username string) (userID int64, firstName string, err error)
 	MarkAsRead(ctx context.Context, chatID int64, maxMsgID int) error
+	EditMessage(ctx context.Context, chatID int64, msgID int, newText string) error
+	ViewPeerStories(ctx context.Context, peerID int64) error
 	IsAvailable() bool
 }

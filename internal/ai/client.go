@@ -555,7 +555,7 @@ func (c *Client) requestAnthropic(
 		}
 	}
 
-	mt := 2048
+	mt := 40000
 	if opts.MaxTokens != nil && *opts.MaxTokens > 0 {
 		mt = *opts.MaxTokens
 	}

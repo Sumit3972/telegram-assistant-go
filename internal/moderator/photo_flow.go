@@ -225,7 +225,8 @@ func (h *ConversationHandler) optimizePhotoPrompt(
 	optCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
-	opts := ai.ChatCompletionOptions{}
+	maxTokens := 40000
+	opts := ai.ChatCompletionOptions{MaxTokens: &maxTokens}
 	res, err := h.aiClient.ChatCompletions(optCtx, messages, opts)
 	if err == nil && res != nil {
 		raw := strings.TrimSpace(res.Message.GetStringContent())
@@ -334,7 +335,8 @@ func (h *ConversationHandler) generatePhotoCaption(
 	visCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 
-	opts := ai.ChatCompletionOptions{}
+	maxTokens := 40000
+	opts := ai.ChatCompletionOptions{MaxTokens: &maxTokens}
 	res, err := h.aiClient.ChatCompletions(visCtx, messages, opts)
 	if err == nil && res != nil {
 		raw := strings.TrimSpace(res.Message.GetStringContent())

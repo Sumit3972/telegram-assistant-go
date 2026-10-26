@@ -190,4 +190,62 @@ func PreDecisionReactionCriteria() map[string]string {
 	return m
 }
 
+// SplitIntoDMBubbles splits a multi-clause text message into two natural rapid bubbles for DMs.
+// Returns (bubble1, bubble2). If the message is short or has no good split point, bubble2 is empty.
+func SplitIntoDMBubbles(text string) (string, string) {
+	trimmed := strings.TrimSpace(text)
+	// Don't split if short (less than 35 characters)
+	if len(trimmed) < 35 {
+		return trimmed, ""
+	}
+
+	// 1. Check for newline break first
+	if idx := strings.Index(trimmed, "\n"); idx != -1 {
+		b1 := strings.TrimSpace(trimmed[:idx])
+		b2 := strings.TrimSpace(trimmed[idx+1:])
+		if len(b1) >= 8 && len(b2) >= 8 {
+			return b1, b2
+		}
+	}
+
+	// 2. Check for sentence endings: "? ", "! ", "... ", ". "
+	sentenceEnders := []string{"? ", "! ", "... ", ". "}
+	bestIdx := -1
+	bestSeLen := 0
+
+	for _, se := range sentenceEnders {
+		idx := strings.Index(trimmed, se)
+		if idx >= 5 && len(trimmed)-(idx+len(se)) >= 8 {
+			if bestIdx == -1 || idx < bestIdx {
+				bestIdx = idx
+				bestSeLen = len(se)
+			}
+		}
+	}
+
+	if bestIdx != -1 {
+		b1 := strings.TrimSpace(trimmed[:bestIdx+bestSeLen-1]) // includes the punctuation mark (e.g. "?")
+		b2 := strings.TrimSpace(trimmed[bestIdx+bestSeLen:])   // starts right after the space
+		if len(b1) >= 5 && len(b2) >= 8 {
+			return b1, b2
+		}
+	}
+
+	// 3. Check for common emoji / laughing break markers like " 😂 ", " 🤣 ", " ✨ ", " haha ", " lol "
+	emojiBreaks := []string{" 😂 ", " 🤣 ", " ✨ ", " haha ", " lol "}
+	for _, eb := range emojiBreaks {
+		idx := strings.Index(trimmed, eb)
+		if idx >= 10 && len(trimmed)-(idx+len(eb)) >= 10 {
+			b1 := strings.TrimSpace(trimmed[:idx+len(eb)-1])
+			b2 := strings.TrimSpace(trimmed[idx+len(eb):])
+			if len(b1) >= 8 && len(b2) >= 8 {
+				return b1, b2
+			}
+		}
+	}
+
+	return trimmed, ""
+}
+
+
 

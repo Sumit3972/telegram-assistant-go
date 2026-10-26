@@ -66,38 +66,38 @@ var WardrobePools = map[string][]WardrobeSetting{
 		{
 			Period:  "daytime_college",
 			Outfit:  "a pastel peach or mint-green Lucknowi Chikankari cotton kurti with delicate white shadow-work thread embroidery, small pearl studs, carrying a canvas tote bag",
-			Setting: "a collegiate classroom corridor or college library study corner, natural diffused daylight through window",
-			Vibe:    "practical lab assignments, coding classes, college friend banter",
+			Setting: "a collegiate classroom corridor or college library study corner at Maharishi Arvind University (MAU) Jaipur, natural diffused daylight through window",
+			Vibe:    "BCA practical lab assignments, coding classes, college friend banter with Neha",
 		},
 		{
 			Period:  "daytime_college",
 			Outfit:  "a vibrant indigo-blue Bagru hand-block printed cotton kurti with oxidized silver stud earrings and a college ID lanyard",
-			Setting: "a bustling college cafeteria outdoor wooden bench with students and neem trees in soft blurred background",
-			Vibe:    "between lectures, sharing canteen samosa and iced tea",
+			Setting: "bustling Maharishi Arvind University campus canteen outdoor wooden bench with students under shady neem trees in background",
+			Vibe:    "between BCA lectures at MAU, sharing canteen samosa and iced tea",
 		},
 		{
 			Period:  "daytime_college",
 			Outfit:  "a crisp powder-blue short kurti paired with ankle-length white trousers, sleek silver wristwatch, no earrings, holding a cold brew tumbler",
-			Setting: "sunlight-dappled college campus lawn under shady trees, spiral notebooks open on grass",
-			Vibe:    "bunking a boring lecture, chilling with friends on campus grass",
+			Setting: "sunlight-dappled Maharishi Arvind University campus lawn in Mansarovar, spiral notebooks open on grass",
+			Vibe:    "chilling on college grass with friends, sunny Jaipur day",
 		},
 		{
 			Period:  "daytime_college",
 			Outfit:  "a sunshine-yellow floral embroidered Chanderi kurti, silver bangles clinking softly, antique gold jhumka earrings, textbook tucked under arm",
-			Setting: "an open red-brick arched campus hallway with soft afternoon natural breeze",
-			Vibe:    "rushing between labs, 75% attendance struggle",
+			Setting: "open red-brick arched campus hallway at Maharishi Arvind University with soft afternoon natural breeze",
+			Vibe:    "rushing between computer labs at MAU, 75% attendance struggle",
 		},
 		{
 			Period:  "daytime_college",
 			Outfit:  "a pastel lilac cotton flared ethnic tunic with subtle thread tassels, small gold hoop earrings, tote bag packed with laptop and water bottle",
-			Setting: "computer science lab workstation bench with a laptop screen displaying Python code and notes",
-			Vibe:    "debugging college assignment code, lab viva prep",
+			Setting: "Maharishi Arvind University computer science lab workstation bench with a laptop screen displaying C++ code and practical file",
+			Vibe:    "debugging BCA college assignment code, lab viva prep",
 		},
 		{
 			Period:  "daytime_college",
 			Outfit:  "an earthy olive-green printed cotton kurta with rolled-up sleeves, minimal look, no earrings, single thin wrist chain",
-			Setting: "a rustic roadside tapri stall right outside college gates with earthen kulhads on wooden counter",
-			Vibe:    "post-lecture kulhad chai ritual with college group",
+			Setting: "a rustic roadside tapri stall right outside Maharishi Arvind University gates with earthen kulhads on wooden counter",
+			Vibe:    "post-lecture kulhad chai ritual with college group Neha & Rohan",
 		},
 	},
 	"golden_hour": {
@@ -204,6 +204,39 @@ func GetTimeOfDayWardrobe() WardrobeSetting {
 	return pool[rand.Intn(len(pool))]
 }
 
+// POVLifePool defines candid still-life "view from my seat" photos (no face).
+var POVLifePool = []WardrobeSetting{
+	{
+		Period:  "daytime_college",
+		Outfit:  "POV candid shot, hands holding a pen, no face visible",
+		Setting: "an open spiral notebook with handwritten BCA Java and C++ code practical notes, a sleek laptop and water bottle on a wooden desk at Maharishi Arvind University lab",
+		Vibe:    "studying, lab practicals, assignment submission at MAU",
+	},
+	{
+		Period:  "golden_hour",
+		Outfit:  "POV candid shot, tea glasses and tissue on table, no face visible",
+		Setting: "two cutting glasses of hot steaming chai and maska bun on a rustic wooden cafe table at Tapri Central Jaipur, overlooking the greenery of Central Park at sunset",
+		Vibe:    "evening tea with friends, Tapri Central vibes",
+	},
+	{
+		Period:  "golden_hour",
+		Outfit:  "POV candid shot, smartphone camera viewpoint overlooking landscape, no face visible",
+		Setting: "a breathtaking sunset view from the stone ramparts of Nahargarh Fort overlooking the entire glowing pink city of Jaipur under an orange and violet evening twilight sky",
+		Vibe:    "Nahargarh sunset view, evening breeze",
+	},
+	{
+		Period:  "evening_night",
+		Outfit:  "POV candid shot, plate of food on table, no face visible",
+		Setting: "a plate of hot steamed momos with spicy red chutney and a cold coffee glass on a table at Gaurav Tower (GT) Jaipur night market with colorful neon mall lights in the background",
+		Vibe:    "GT street food, evening hangout",
+	},
+}
+
+func GetPOVLifeSetting() WardrobeSetting {
+	return POVLifePool[rand.Intn(len(POVLifePool))]
+}
+
+
 // BuildChaviSelfiePrompt builds a dynamic photorealistic fallback prompt when LLM optimization fails.
 // No wardrobe pools — fully intent-driven. Western style by default.
 func BuildChaviSelfiePrompt(userRequest string) string {
@@ -233,6 +266,9 @@ func BuildChaviSelfiePrompt(userRequest string) string {
 		styleClause = "wet hair dripping, sheer wet white shirt clinging to her curves, steamy bathroom mirror selfie, moody warm lighting"
 	case strings.Contains(lowerReq, "sexy") || strings.Contains(lowerReq, "hot") || strings.Contains(lowerReq, "bold"):
 		styleClause = "wearing a sheer black bodycon dress with a plunging neckline, confident seductive pose, dim warm bedroom lighting"
+	case strings.Contains(lowerReq, "chai") || strings.Contains(lowerReq, "tea") || strings.Contains(lowerReq, "assignment") || strings.Contains(lowerReq, "notes") || strings.Contains(lowerReq, "sunset") || strings.Contains(lowerReq, "view"):
+		pov := GetPOVLifeSetting()
+		return fmt.Sprintf("A candid raw smartphone photograph of %s. %s, shot on Apple iPhone 15 Pro, authentic available ambient lighting, 3:4 portrait ratio, zero plastic look.", pov.Setting, pov.Vibe)
 	case strings.Contains(lowerReq, "saree") || strings.Contains(lowerReq, "lehenga") || strings.Contains(lowerReq, "kurti") || strings.Contains(lowerReq, "ethnic") || strings.Contains(lowerReq, "traditional"):
 		styleClause = "wearing a traditional silk saree with antique gold jhumka earrings, natural warm lighting"
 	default:

@@ -771,7 +771,7 @@ func (c *Client) Complete(
 					"contents": contents,
 					"generationConfig": map[string]any{
 						"temperature":     0.85,
-						"maxOutputTokens": 2048,
+						"maxOutputTokens": 40000,
 					},
 					"safetySettings": []map[string]string{
 						{"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},

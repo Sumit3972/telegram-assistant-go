@@ -65,6 +65,17 @@ type ConversationHandler struct {
 	recentReplies    sync.Map // chatID (string) -> []string
 	recentRepliesMu  sync.Mutex
 	userPhotoPending sync.Map // userID (string) -> bool (true if Chavi sent photo, waiting for user photo before sending again)
+
+	sleepQueueMu sync.Mutex
+	sleepQueue   map[string]*domain.TelegramMessage
+}
+
+func isJaipurSleepHours(t time.Time) bool {
+	loc := time.FixedZone("IST", 5*3600+30*60)
+	now := t.In(loc)
+	hour := now.Hour()
+	min := now.Minute()
+	return (hour == 1 && min >= 30) || (hour >= 2 && hour < 7) || (hour == 7 && min < 30)
 }
 
 func (h *ConversationHandler) hasUserPhotoPending(userID string) bool {
@@ -152,7 +163,7 @@ func NewConversationHandler(
 		maxBatchWait = defaultMaxBatchWait
 	}
 
-	return &ConversationHandler{
+	handler := &ConversationHandler{
 		aiClient:         aiClient,
 		decisionClient:   decision.NewClient(codivKey),
 		imageService:     imageService,
@@ -174,6 +185,81 @@ func NewConversationHandler(
 		debounceDuration: debounceDuration,
 		maxBatchWait:     maxBatchWait,
 		batches:          make(map[string]*messageBatch),
+		sleepQueue:       make(map[string]*domain.TelegramMessage),
+	}
+	go handler.startWakeUpScheduler(context.Background())
+	return handler
+}
+
+func (h *ConversationHandler) startWakeUpScheduler(ctx context.Context) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	loc := time.FixedZone("IST", 5*3600+30*60)
+	wakeUpDoneDate := ""
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			now := time.Now().In(loc)
+			todayDate := now.Format("2006-01-02")
+			// Option B Wake-Up: 08:15 AM to 08:35 AM IST in Jaipur
+			if now.Hour() == 8 && now.Minute() >= 15 && now.Minute() <= 35 && wakeUpDoneDate != todayDate {
+				wakeUpDoneDate = todayDate
+				h.flushSleepWakeUpQueue(ctx)
+			}
+		}
+	}
+}
+
+func (h *ConversationHandler) flushSleepWakeUpQueue(ctx context.Context) {
+	h.sleepQueueMu.Lock()
+	queued := make(map[string]*domain.TelegramMessage)
+	for k, v := range h.sleepQueue {
+		queued[k] = v
+	}
+	h.sleepQueue = make(map[string]*domain.TelegramMessage)
+	h.sleepQueueMu.Unlock()
+
+	if len(queued) == 0 {
+		return
+	}
+
+	log.Printf("[SleepEngine] 🌅 08:15 AM Jaipur Wake-Up! Flushing %d deferred nighttime messages...", len(queued))
+
+	for _, msg := range queued {
+		go func(m *domain.TelegramMessage) {
+			// Double blue tick upon waking up
+			if h.userbotSender != nil && h.userbotSender.IsAvailable() {
+				_ = h.userbotSender.MarkAsRead(ctx, m.Chat.ID, m.MessageID)
+			}
+
+			// Stagger wakes naturally between 1.5s and 5s
+			time.Sleep(time.Duration(1500+rand.Intn(3500)) * time.Millisecond)
+
+			nightText := strings.TrimSpace(m.Text)
+			if nightText == "" {
+				nightText = strings.TrimSpace(m.Caption)
+			}
+
+			displayUser := prompt.SanitizeInterlocutorName(m.From.FirstName)
+			if displayUser == "" {
+				displayUser = "Friend"
+			}
+
+			situation := fmt.Sprintf(
+				"You just woke up around 08:15 AM at your home in Jaipur, getting ready for BCA classes at Maharishi Arvind University (MAU). The user messaged you late last night while you were asleep in bed. Casually greet them good morning in fresh, spontaneous Gen-Z Hinglish, casually mention you fell asleep early last night, and respond directly to what they texted (user texted: %q). Keep it natural, punchy, 1-2 lines.",
+				nightText,
+			)
+
+			morningReply, _ := h.generateDynamicDialogue(ctx, situation, nightText, "casual_friend", displayUser)
+			if strings.TrimSpace(morningReply) == "" {
+				morningReply = "good morning yrr! kal raat ko jaldi so gayi thi haha, bata kya bol raha tha? ✨"
+			}
+			h.sendMessage(ctx, m, morningReply)
+		}(msg)
 	}
 }
 
@@ -193,6 +279,17 @@ func (h *ConversationHandler) EnqueueConversation(ctx context.Context, msg *doma
 	}
 
 	key := fmt.Sprintf("%d:%d", msg.Chat.ID, msg.From.ID)
+
+	// Option B Sleep Engine: 01:30 AM - 07:30 AM IST in Jaipur
+	// If in DM and not owner/admin: leave unread (no blue tick) and queue for 08:15 AM wake-up
+	isDM := msg.Chat.Type == "private" || msg.Chat.ID > 0
+	if isJaipurSleepHours(time.Now()) && isDM && !isAdmin {
+		h.sleepQueueMu.Lock()
+		h.sleepQueue[key] = msg
+		h.sleepQueueMu.Unlock()
+		log.Printf("[SleepEngine] 🌙 User %d messaged at %s during Jaipur sleep hours. Deferred unread for 08:15 AM wake-up.", msg.From.ID, time.Now().Format("15:04"))
+		return
+	}
 	text := strings.TrimSpace(msg.Text)
 	if text == "" {
 		text = strings.TrimSpace(msg.Caption)
@@ -389,6 +486,12 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 	// Send MTProto Read Receipt (Double Blue Ticks) to confirm message was seen by human
 	if h.userbotSender != nil && h.userbotSender.IsAvailable() && msg.MessageID > 0 {
 		_ = h.userbotSender.MarkAsRead(ctx, msg.Chat.ID, msg.MessageID)
+		if msg.Chat.ID > 0 {
+			// Subtle human reciprocity: view peer's TG stories in background
+			go func(peerID int64) {
+				_ = h.userbotSender.ViewPeerStories(context.Background(), peerID)
+			}(msg.Chat.ID)
+		}
 	}
 
 	// Instant Sticker & Standalone Emoji Interceptor (Fast Jev reaction, zero text reply)
@@ -414,7 +517,8 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 			chosenReaction = prompt.DefaultReactionEmoji()
 		}
 
-		// Real human reaction delay (~700ms - 1300ms)
+		// Real human reaction delay (~700ms - 1300ms) with choose_sticker action
+		h.sendChatAction(ctx, msg.Chat.ID, msg.IsUserbot, "choose_sticker")
 		time.Sleep(time.Duration(700+rand.Intn(600)) * time.Millisecond)
 
 		h.setReaction(ctx, msg, chosenReaction)
@@ -849,9 +953,11 @@ func (h *ConversationHandler) HandleConversation(ctx context.Context, msg *domai
 		tools = append(tools, ai.GetAdminTools()...)
 	}
 
+	maxTokens := 40000
 	opts := ai.ChatCompletionOptions{
 		Tools:          tools,
 		ResponseFormat: map[string]any{"type": "json_object"},
+		MaxTokens:      &maxTokens,
 	}
 
 	// 7. Generation & Loop 2 Quality Critic Loop (Up to 4 Retries)
@@ -1302,7 +1408,23 @@ func (h *ConversationHandler) dispatchChannelOutput(
 		recent, _ := h.historyRepo.GetRecentMessages(ctx, chatIDStr, 80)
 		go func() {
 			defer h.inFlightPhotos.Delete(photoKey)
+			isUB := h.userbotSender != nil && h.userbotSender.IsAvailable() && msg.Chat.ID > 0
+			photoDone := make(chan struct{})
+			go func() {
+				ticker := time.NewTicker(4 * time.Second)
+				defer ticker.Stop()
+				h.sendChatAction(context.Background(), msg.Chat.ID, isUB, "upload_photo")
+				for {
+					select {
+					case <-photoDone:
+						return
+					case <-ticker.C:
+						h.sendChatAction(context.Background(), msg.Chat.ID, isUB, "upload_photo")
+					}
+				}
+			}()
 			h.processPhotoRequest(context.Background(), msg, userText, recent, 50)
+			close(photoDone)
 		}()
 		return
 	}
@@ -1420,13 +1542,13 @@ func (h *ConversationHandler) generateDynamicDialogue(
 	displayUser string,
 ) (replyText, voiceScript string) {
 	promptText := fmt.Sprintf(
-		`You are Chavi Sharma, a 21-year-old BCA student living in Jaipur. You are texting with %s.
+		`You are Chavi Sharma, a 21-year-old BCA student at Maharishi Arvind University (MAU) living in Jaipur. You are texting with %s.
 Relationship tier: %s.
 User's message: %q.
 Situation: %s.
 
 Rules:
-- Respond naturally and spontaneously in 1 short Hinglish sentence.
+- Respond naturally and spontaneously in 1-2 short Hinglish lines.
 - NEVER sound like an AI, robot, or customer support.
 - NO clichés like "robot dikh rahi hoon", "dimag mat chaat", "has has ke pet dard".
 - Return STRICT JSON:
@@ -1437,8 +1559,10 @@ Rules:
 	messages := []domain.ChatMessage{
 		{Role: "user", Content: promptText},
 	}
+	maxTokens := 40000
 	opts := ai.ChatCompletionOptions{
 		ResponseFormat: map[string]any{"type": "json_object"},
+		MaxTokens:      &maxTokens,
 	}
 
 	callCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -1707,11 +1831,28 @@ func sanitizeReplyText(text string) string {
 }
 
 func (h *ConversationHandler) sendMessage(ctx context.Context, msg *domain.TelegramMessage, text string) {
-	// Natural human typing action delay proportional to message length (~35ms per character)
+	isDM := msg.Chat.Type == "private" || msg.Chat.ID > 0
+	if isDM {
+		b1, b2 := prompt.SplitIntoDMBubbles(text)
+		if b2 != "" {
+			h.sendSingleTextBubble(ctx, msg, b1, msg.MessageID)
+			// Natural human pause between bubbles (~700ms - 1300ms) with typing action
+			h.sendChatAction(ctx, msg.Chat.ID, msg.IsUserbot, "typing")
+			time.Sleep(time.Duration(700+rand.Intn(600)) * time.Millisecond)
+			h.sendSingleTextBubble(ctx, msg, b2, 0)
+			return
+		}
+	}
+
+	h.sendSingleTextBubble(ctx, msg, text, msg.MessageID)
+}
+
+func (h *ConversationHandler) sendSingleTextBubble(ctx context.Context, msg *domain.TelegramMessage, text string, replyToID int) {
+	// Natural human typing action delay proportional to message length (~28ms per character)
 	h.sendChatAction(ctx, msg.Chat.ID, msg.IsUserbot, "typing")
-	typeDelay := time.Duration(600+len(text)*32+rand.Intn(400)) * time.Millisecond
-	if typeDelay > 4200*time.Millisecond {
-		typeDelay = 4200 * time.Millisecond
+	typeDelay := time.Duration(500+len(text)*28+rand.Intn(350)) * time.Millisecond
+	if typeDelay > 3500*time.Millisecond {
+		typeDelay = 3500 * time.Millisecond
 	}
 	select {
 	case <-time.After(typeDelay):
@@ -1719,12 +1860,42 @@ func (h *ConversationHandler) sendMessage(ctx context.Context, msg *domain.Teleg
 		return
 	}
 
+	// Suggestion 5: Occasional natural keyboard typo and 2-second live edit (DMs only, ~1 in 35 messages)
+	isDM := msg.Chat.Type == "private" || msg.Chat.ID > 0
+	shouldLiveEdit := msg.IsUserbot && isDM && rand.Intn(35) == 0 && len(text) > 25
+	textToSend := text
+	cleanWord := ""
+
+	if shouldLiveEdit {
+		typoMap := map[string]string{
+			"practical":  "praktical",
+			"college":    "colg",
+			"bilkul":     "bilkull",
+			"actually":   "actuly",
+			"assignment": "asignmnt",
+		}
+		for correct, typo := range typoMap {
+			if strings.Contains(strings.ToLower(text), correct) {
+				cleanWord = correct
+				textToSend = strings.Replace(text, correct, typo, 1)
+				break
+			}
+		}
+	}
+
 	chatIDStr := fmt.Sprintf("%d", msg.Chat.ID)
 	_ = h.historyRepo.AddMessage(ctx, chatIDStr, "assistant", h.botUsername, text, "", strconv.Itoa(msg.MessageID))
 
 	if msg.IsUserbot && h.userbotSender != nil && h.userbotSender.IsAvailable() {
-		err := h.userbotSender.SendMessage(ctx, msg.Chat.ID, text, msg.MessageID)
+		sentID, err := h.userbotSender.SendMessageGetID(ctx, msg.Chat.ID, textToSend, replyToID)
 		if err == nil {
+			// If a typo was simulated and we have the message ID, wait ~2 seconds and edit it live!
+			if cleanWord != "" && sentID > 0 {
+				go func(mID int, origText string) {
+					time.Sleep(2200 * time.Millisecond)
+					_ = h.userbotSender.EditMessage(context.Background(), msg.Chat.ID, mID, origText)
+				}(sentID, text)
+			}
 			return
 		}
 		log.Printf("[Conversation] ⚠️ Userbot SendMessage failed in chat %d (%v). Falling back to BotClient...", msg.Chat.ID, err)
@@ -1732,7 +1903,7 @@ func (h *ConversationHandler) sendMessage(ctx context.Context, msg *domain.Teleg
 
 	botChatID := h.getBotAPIChatID(msg)
 	if _, err := h.botClient.SendMessage(ctx, botChatID, text, telegram.SendMessageOptions{
-		ReplyToID: msg.MessageID,
+		ReplyToID: replyToID,
 	}); err != nil {
 		log.Printf("❌ [Conversation] BotClient SendMessage failed in chat %d (%v)", botChatID, err)
 	}

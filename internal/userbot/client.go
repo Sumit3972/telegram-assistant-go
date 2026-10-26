@@ -754,32 +754,67 @@ func (ub *UserbotManager) getInputPeer(ctx context.Context, chatID int64) (tg.In
 	return nil, fmt.Errorf("unable to resolve InputPeer for chat %d (missing AccessHash)", chatID)
 }
 
-// SendMessage sends a text message from the real personal account via MTProto.
-func (ub *UserbotManager) SendMessage(ctx context.Context, chatID int64, text string, replyToID int) error {
+func extractMsgIDFromUpdates(updates tg.UpdatesClass) int {
+	switch u := updates.(type) {
+	case *tg.UpdateShortSentMessage:
+		return u.ID
+	case *tg.Updates:
+		for _, up := range u.Updates {
+			switch m := up.(type) {
+			case *tg.UpdateNewMessage:
+				if msg, ok := m.Message.(*tg.Message); ok {
+					return msg.ID
+				}
+			case *tg.UpdateNewChannelMessage:
+				if msg, ok := m.Message.(*tg.Message); ok {
+					return msg.ID
+				}
+			}
+		}
+	case *tg.UpdatesCombined:
+		for _, up := range u.Updates {
+			switch m := up.(type) {
+			case *tg.UpdateNewMessage:
+				if msg, ok := m.Message.(*tg.Message); ok {
+					return msg.ID
+				}
+			case *tg.UpdateNewChannelMessage:
+				if msg, ok := m.Message.(*tg.Message); ok {
+					return msg.ID
+				}
+			}
+		}
+	}
+	return 0
+}
+
+// SendMessageGetID sends a text message and returns the sent message's ID.
+func (ub *UserbotManager) SendMessageGetID(ctx context.Context, chatID int64, text string, replyToID int) (int, error) {
 	ub.senderMu.RLock()
 	snd := ub.sender
 	ub.senderMu.RUnlock()
 
 	if snd == nil {
-		return fmt.Errorf("userbot MTProto client is not connected")
+		return 0, fmt.Errorf("userbot MTProto client is not connected")
 	}
 
 	peer, err := ub.getInputPeer(ctx, chatID)
 	if err != nil {
-		return fmt.Errorf("userbot getInputPeer failed for %d: %w", chatID, err)
+		return 0, fmt.Errorf("userbot getInputPeer failed for %d: %w", chatID, err)
 	}
 
+	var updates tg.UpdatesClass
 	var sendErr error
 	if replyToID > 0 {
-		_, sendErr = snd.To(peer).Reply(replyToID).Text(ctx, text)
+		updates, sendErr = snd.To(peer).Reply(replyToID).Text(ctx, text)
 	} else {
-		_, sendErr = snd.To(peer).Text(ctx, text)
+		updates, sendErr = snd.To(peer).Text(ctx, text)
 	}
 
 	// If replying failed with MSG_ID_INVALID or any message ID error, retry direct text without reply
 	if sendErr != nil && replyToID > 0 {
 		log.Printf("[Userbot MTProto] Reply to msg %d failed in %d (%v). Retrying direct text without reply...", replyToID, chatID, sendErr)
-		_, sendErr = snd.To(peer).Text(ctx, text)
+		updates, sendErr = snd.To(peer).Text(ctx, text)
 	}
 
 	// If CHANNEL_INVALID or PEER_ID_INVALID, refresh dialogs and retry send
@@ -787,17 +822,24 @@ func (ub *UserbotManager) SendMessage(ctx context.Context, chatID int64, text st
 		log.Printf("[Userbot MTProto] Got %v for chat %d. Refreshing dialogs and retrying send...", sendErr, chatID)
 		_ = ub.syncDialogs(ctx)
 		if refreshedPeer, pErr := ub.getInputPeer(ctx, chatID); pErr == nil {
-			_, sendErr = snd.To(refreshedPeer).Text(ctx, text)
+			updates, sendErr = snd.To(refreshedPeer).Text(ctx, text)
 		}
 	}
 
 	if sendErr != nil {
 		log.Printf("❌ [Userbot MTProto] SendMessage to %d failed: %v", chatID, sendErr)
-		return sendErr
+		return 0, sendErr
 	}
 
-	log.Printf("✅ [Userbot MTProto] SendMessage succeeded in chat %d!", chatID)
-	return nil
+	sentID := extractMsgIDFromUpdates(updates)
+	log.Printf("✅ [Userbot MTProto] SendMessage succeeded in chat %d! (msgID: %d)", chatID, sentID)
+	return sentID, nil
+}
+
+// SendMessage sends a text message from the real personal account via MTProto.
+func (ub *UserbotManager) SendMessage(ctx context.Context, chatID int64, text string, replyToID int) error {
+	_, err := ub.SendMessageGetID(ctx, chatID, text, replyToID)
+	return err
 }
 
 // SendPhoto sends a photo from the real personal account via MTProto.
@@ -1018,6 +1060,59 @@ func (ub *UserbotManager) MarkAsRead(ctx context.Context, chatID int64, maxMsgID
 	}
 	return err
 }
+
+// EditMessage edits a previously sent message via MTProto MessagesEditMessage.
+func (ub *UserbotManager) EditMessage(ctx context.Context, chatID int64, msgID int, newText string) error {
+	ub.senderMu.RLock()
+	rawAPI := ub.rawAPI
+	ub.senderMu.RUnlock()
+
+	if rawAPI == nil {
+		return fmt.Errorf("userbot MTProto client is not connected")
+	}
+
+	peer, err := ub.getInputPeer(ctx, chatID)
+	if err != nil {
+		return err
+	}
+
+	_, err = rawAPI.MessagesEditMessage(ctx, &tg.MessagesEditMessageRequest{
+		Peer:    peer,
+		ID:      msgID,
+		Message: newText,
+	})
+	if err != nil {
+		log.Printf("[Userbot] ⚠️ EditMessage failed in chat %d for msg %d: %v", chatID, msgID, err)
+		return err
+	}
+	log.Printf("[Userbot] ✏️ Successfully edited msg %d in chat %d to: %q", msgID, chatID, newText)
+	return nil
+}
+
+// ViewPeerStories marks stories from a user/peer as viewed.
+func (ub *UserbotManager) ViewPeerStories(ctx context.Context, peerID int64) error {
+	ub.senderMu.RLock()
+	rawAPI := ub.rawAPI
+	ub.senderMu.RUnlock()
+
+	if rawAPI == nil {
+		return fmt.Errorf("userbot MTProto client is not connected")
+	}
+
+	peer, err := ub.getInputPeer(ctx, peerID)
+	if err != nil {
+		return err
+	}
+
+	_, err = rawAPI.StoriesReadStories(ctx, &tg.StoriesReadStoriesRequest{
+		Peer: peer,
+	})
+	if err == nil {
+		log.Printf("[Userbot] 👁️ Viewed stories for peer %d", peerID)
+	}
+	return err
+}
+
 
 // BlockUser blocks a user natively on Telegram via MTProto ContactsBlock.
 func (ub *UserbotManager) BlockUser(ctx context.Context, userID int64) error {
